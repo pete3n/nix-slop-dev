@@ -185,6 +185,15 @@ let
         concatMapStringsSep ";" luaPackages.getLuaPath resolvedExtraLuaPackages
       }"'';
 
+  startPlugins = map (p: p.plugin) (builtins.filter (p: !p.optional) normalizedPlugins);
+  optPlugins = map (p: p.plugin) (builtins.filter (p: p.optional) normalizedPlugins);
+  packDir = pkgs-wrapNeovim.vimUtils.packDir {
+    myNeovimPackages = {
+      start = startPlugins;
+      opt = optPlugins;
+    };
+  };
+
   # wrapNeovimUnstable is the nixpkgs utility function for building a Neovim derivation.
   neovim-wrapped = pkgs-wrapNeovim.wrapNeovimUnstable neovim-unwrapped (
     neovimConfig
@@ -206,11 +215,10 @@ let
 in
 neovim-wrapped.overrideAttrs (oa: {
   passthru = (oa.passthru or { }) // {
-    packDir = pkgs-wrapNeovim.vimUtils.packDir neovimConfig.packpathDirs;
+    inherit packDir; 
   };
   buildPhase =
     oa.buildPhase
-    # If a custom NVIM_APPNAME has been set, rename the `nvim` binary
     + lib.optionalString isCustomAppName ''
       mv $out/bin/nvim $out/bin/${lib.escapeShellArg appName}
     '';
