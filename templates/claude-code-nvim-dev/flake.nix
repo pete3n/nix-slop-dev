@@ -7,7 +7,7 @@
     gen-luarc.url = "github:mrcjkb/nix-gen-luarc-json";
     nix-slop-dev.url = "github:pete3n/nix-slop-dev";
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
-   
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
