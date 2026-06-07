@@ -1,4 +1,5 @@
-# Nix development flake environments for AI agent coding
+# Nix Slop Dev 
+Development flake environments for AI agent coding
 
 ## Usage
 ### flake.nix inputs
