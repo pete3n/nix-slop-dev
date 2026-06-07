@@ -132,7 +132,7 @@
             (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
             (add-pkg-deps (basePkgs ++ projectPkgs))
           ]
-          ++ lib.mapAttrsToList (k: v: jail.combinators.set-env k v) projectEnv;
+          ++ lib.mapAttrsToList (key: value: jail.combinators.set-env key value) projectEnv;
 
         jailedClaude = jail "jailed-claude" claude-pkg jailCombinators;
         jailedShell = jail "jailed-shell" pkgs.bashInteractive jailCombinators;
