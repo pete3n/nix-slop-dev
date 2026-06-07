@@ -60,9 +60,9 @@ let
   neovimConfig = {
     wrapperArgs = [
       "--add-flags"
-      ''-c "set packpath^=${packDir}"''
+      ''--cmd "set packpath^=${packDir}"''
       "--add-flags"
-      ''-c "set rtp^=${packDir}"''
+      ''--cmd "set rtp^=${packDir}"''
     ]
     ++ optionals withPython3 [
       "--add-flags"
