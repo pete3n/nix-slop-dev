@@ -21,7 +21,10 @@
     }:
     let
       # Darwin not supported by the sandbox solution
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       neovim-overlay = import ./slop-env/nix/neovim-overlay.nix { inherit inputs; };
     in
     flake-utils.lib.eachSystem systems (
@@ -147,29 +150,64 @@
             jailedClaude
             jailedShell
           ];
-          shellHook = ''
-            # Neovim dev environment setup
-            ln -fs ${pkgs.nvim-luarc-json} .luarc.json
-            mkdir -p ~/.config
-            ln -Tfns $PWD/nvim ~/.config/nvim-dev
+          shellHook = # sh
+            ''
+              # Neovim dev environment setup
+              ln -fs ${pkgs.nvim-luarc-json} .luarc.json
+              mkdir -p ~/.config
+              rm -rf ~/.local/state/nvim-dev/swap
+              mkdir -p ~/.local/state/nvim-dev/swap
+              ln -Tfns "$PWD/nvim" ~/.config/nvim-dev
 
-            export NVIM_PACKPATH="${nvimPackDir}"
-            export NVIM_RTP="${nvimPackDir}"
-            export VIMRUNTIME="${nvimDev}/share/nvim/runtime"
-            export LUA_PATH="$PWD/lua/?.lua;$PWD/lua/?/init.lua;$PWD/plugin/?.lua;$PWD/plugin/?/init.lua;$LUA_PATH"
+              export NVIM_PACKPATH="${nvimPackDir}"
+              export NVIM_RTP="${nvimPackDir}"
+              export VIMRUNTIME="${nvimDev}/share/nvim/runtime"
+              export LUA_PATH="$PWD/lua/?.lua;$PWD/lua/?/init.lua;$PWD/plugin/?.lua;$PWD/plugin/?/init.lua;''${LUA_PATH:-}"
 
-            printf 'nvim-dev: %s\n' "$(which nvim-dev)"
-            printf 'NVIM_PACKPATH: %s\n' "$NVIM_PACKPATH"
-            printf 'VIMRUNTIME: %s\n' "$VIMRUNTIME"
+              printf 'nvim-dev: %s\n' "$(which nvim-dev)"
 
-            # Jailed Claude Code
-            claude() {
-              sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
-                setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
-            }
-            alias jail-test="setpriv --ambient-caps=-sys_nice -- jailed-shell"
-            printf "Jailed claude available. Run claude to start.\n"
-          '';
+              # First-time setup checks
+              _setup_ok=1
+
+              # Check system prerequisites
+              if ! systemctl is-active --quiet auditd 2>/dev/null; then
+                printf '\033[1;33m⚠ auditd is not running.\033[0m\n'
+                printf '  The sandboxed wrapper requires auditd for violation detection.\n'
+                printf '  Add to your NixOS config:\n'
+                printf '    security.sandboxed.enable = true;\n'
+                printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
+                _setup_ok=0
+              fi
+
+              if ! sudo -n ${pkgs.systemd}/bin/systemd-run --help >/dev/null 2>&1; then
+                printf '\033[1;33m⚠ NOPASSWD sudo for systemd-run is not configured.\033[0m\n'
+                printf '  The sandboxed wrapper needs passwordless sudo for:\n'
+                printf '    systemd-run, systemctl, auditctl, ausearch, tail\n'
+                printf '  Add to your NixOS config:\n'
+                printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
+                _setup_ok=0
+              fi
+
+              # Check Claude credentials
+							if [ ! -s "${cfgDir}/.credentials.json" ] && [ ! -s "${cfgDir}/.claude.json" ]; then
+								printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
+								printf '  Run claude to complete OAuth login on first use.\n\n'
+								_setup_ok=0
+							fi
+
+              if [ "$_setup_ok" -eq 1 ]; then
+                printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
+              fi
+
+              # Jailed Claude Code
+              claude() {
+								mkdir -p "${cfgDir}"
+								touch "${cfgDir}/.credentials.json" "${cfgDir}/.claude.json"
+                sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+                  setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
+              }
+              alias jail-shell="setpriv --ambient-caps=-sys_nice -- jailed-shell"
+            '';
         };
       }
     )
