@@ -7,12 +7,11 @@
     gen-luarc.url = "github:mrcjkb/nix-gen-luarc-json";
     nix-slop-dev.url = "github:pete3n/nix-slop-dev";
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
-    llm-agents.url = "github:numtide/llm-agents.nix";
+   
   };
 
   outputs =
     inputs@{
-      self,
       nixpkgs,
       flake-utils,
       nix-slop-dev,
@@ -23,7 +22,7 @@
     let
       # Darwin not supported by the sandbox solution
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      neovim-overlay = import ./nix/neovim-overlay.nix { inherit inputs; };
+      neovim-overlay = import ./neovim-overlay.nix { inherit inputs; };
     in
     flake-utils.lib.eachSystem systems (
       system:
@@ -37,11 +36,9 @@
         };
         lib = pkgs.lib;
 
-        # ── Neovim derivations from the overlay ──
         nvimDev = pkgs.nvim-dev;
         nvimPackDir = nvimDev.packDir;
 
-        # ── Jail infrastructure ──
         jail = jail-nix.lib.init pkgs;
         claude-pkg = llm-agents.packages.${system}.claude-code;
         sandboxed = nix-slop-dev.packages.${system}.sandboxed;
