@@ -3,7 +3,8 @@ if vim.g.did_load_treesitter_plugin then
 end
 vim.g.did_load_treesitter_plugin = true
 
-local configs = require('nvim-treesitter.configs')
+-- Grammars are installed by Nix (withAllGrammars), no runtime setup needed.
+vim.treesitter.start()
 vim.g.skip_ts_context_comment_string_module = true
 
 ---@diagnostic disable-next-line: missing-fields

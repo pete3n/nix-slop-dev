@@ -25,16 +25,17 @@ end
 opt.swapfile = false
 
 -- Configure LSPs
-require('lspconfig').lua_ls.setup { cmd = { 'lua-language-server' } }
-require('lspconfig').nixd.setup {
+vim.lsp.config('lua_ls', {cmd = { 'lua-language-server' } })
+vim.lsp.config('nixd', {
   settings = {
     nixd = {
       formatting = {
-        command = { 'nixfmt-rfc-style' },
+        command = { 'nixfmt' },
       },
     },
   },
-}
+})
+vim.lsp.enable('nixd')
 
 -- Configure Conform
 
