@@ -57,16 +57,17 @@ let
 
   # This nixpkgs util function creates an attrset
   # that pkgs.wrapNeovimUnstable uses to configure the Neovim build.
-  neovimConfig = pkgs-wrapNeovim.neovimUtils.makeNeovimConfig {
-    inherit
-      extraPython3Packages
-      withPython3
-      withRuby
-      withNodeJs
-      viAlias
-      vimAlias
-      ;
-    plugins = normalizedPlugins;
+  neovimConfig = {
+    wrapperArgs = [
+      "--add-flags"
+      ''-c "set packpath^=${packDir}"''
+      "--add-flags"
+      ''-c "set rtp^=${packDir}"''
+    ]
+    ++ optionals withPython3 [
+      "--add-flags"
+      ''"--cmd" "let g:python3_host_prog='${pkgs.python3.withPackages extraPython3Packages}/bin/python3'"''
+    ];
   };
 
   # This uses the ignoreConfigRegexes list to filter
@@ -195,27 +196,24 @@ let
   };
 
   # wrapNeovimUnstable is the nixpkgs utility function for building a Neovim derivation.
-  neovim-wrapped = pkgs-wrapNeovim.wrapNeovimUnstable neovim-unwrapped (
-    neovimConfig
-    // {
-      luaRcContent = initLua;
-      wrapperArgs =
-        escapeShellArgs neovimConfig.wrapperArgs
-        + " "
-        + extraMakeWrapperArgs
-        + " "
-        + extraMakeWrapperLuaCArgs
-        + " "
-        + extraMakeWrapperLuaArgs;
-      wrapRc = wrapRc;
-    }
-  );
+  neovim-wrapped = pkgs-wrapNeovim.wrapNeovimUnstable neovim-unwrapped {
+    luaRcContent = initLua;
+    wrapperArgs =
+      escapeShellArgs neovimConfig.wrapperArgs
+      + " "
+      + extraMakeWrapperArgs
+      + " "
+      + extraMakeWrapperLuaCArgs
+      + " "
+      + extraMakeWrapperLuaArgs;
+    wrapRc = wrapRc;
+  };
 
   isCustomAppName = appName != null && appName != "nvim";
 in
 neovim-wrapped.overrideAttrs (oa: {
   passthru = (oa.passthru or { }) // {
-    inherit packDir; 
+    inherit packDir;
   };
   buildPhase =
     oa.buildPhase
