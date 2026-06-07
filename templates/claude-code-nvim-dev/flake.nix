@@ -56,8 +56,7 @@
         };
 
         # Resolved at nix eval time — correct for local devShell builds.
-        homeDir = builtins.getEnv "HOME";
-        cfgDir = homeDir + "/.config/claude";
+        cfgDir = "~/.config/claude";
         skillsDir = ./slop-env/claude-config/skills;
 
         basePkgs = with pkgs; [
@@ -104,8 +103,9 @@
 
             (try-readwrite (noescape "~/.claude.json"))
             (tmpfs (noescape cfgDir))
-            (ro-bind "${skillsDir}" "${cfgDir}/skills")
+            (ro-bind "${skillsDir}" (noescape "${cfgDir}/skills"))
             (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
+            (try-readwrite (noescape "${cfgDir}/.credentials.json"))
             (write-text (noescape "${cfgDir}/CLAUDE.md") (builtins.readFile ./slop-env/claude-config/CLAUDE.md))
 
             # Persistent runtime state
@@ -128,7 +128,7 @@
             (try-readwrite (noescape "~/.npm"))
             (try-readwrite (noescape "~/.local/share/claude-code"))
 
-            (set-env "CLAUDE_CONFIG_DIR" cfgDir)
+            (try-fwd-env "CLAUDE_CONFIG_DIR")
             (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
             (add-pkg-deps (basePkgs ++ projectPkgs))
           ]
@@ -152,61 +152,62 @@
           ];
           shellHook = # sh
             ''
-              # Neovim dev environment setup
-              ln -fs ${pkgs.nvim-luarc-json} .luarc.json
-              mkdir -p ~/.config
-              rm -rf ~/.local/state/nvim-dev/swap
-              mkdir -p ~/.local/state/nvim-dev/swap
-              ln -Tfns "$PWD/nvim" ~/.config/nvim-dev
+              	# Neovim dev environment setup
+              	ln -fs ${pkgs.nvim-luarc-json} .luarc.json
+              	mkdir -p ~/.config
+              	rm -rf ~/.local/state/nvim-dev/swap
+              	mkdir -p ~/.local/state/nvim-dev/swap
+              	ln -Tfns "$PWD/nvim" ~/.config/nvim-dev
 
-              export NVIM_PACKPATH="${nvimPackDir}"
-              export NVIM_RTP="${nvimPackDir}"
-              export VIMRUNTIME="${nvimDev}/share/nvim/runtime"
-              export LUA_PATH="$PWD/lua/?.lua;$PWD/lua/?/init.lua;$PWD/plugin/?.lua;$PWD/plugin/?/init.lua;''${LUA_PATH:-}"
+              	export NVIM_PACKPATH="${nvimPackDir}"
+              	export NVIM_RTP="${nvimPackDir}"
+              	export VIMRUNTIME="${nvimDev}/share/nvim/runtime"
+              	export LUA_PATH="$PWD/lua/?.lua;$PWD/lua/?/init.lua;$PWD/plugin/?.lua;$PWD/plugin/?/init.lua;''${LUA_PATH:-}"
 
-              printf 'nvim-dev: %s\n' "$(which nvim-dev)"
+              	printf 'nvim-dev: %s\n' "$(which nvim-dev)"
 
-              # First-time setup checks
-              _setup_ok=1
+              	# Setup checks
+              	export CLAUDE_CONFIG_DIR="$HOME/.config/claude"
+              	_setup_ok=1
 
-              # Check system prerequisites
-              if ! systemctl is-active --quiet auditd 2>/dev/null; then
-                printf '\033[1;33m⚠ auditd is not running.\033[0m\n'
-                printf '  The sandboxed wrapper requires auditd for violation detection.\n'
-                printf '  Add to your NixOS config:\n'
-                printf '    security.sandboxed.enable = true;\n'
-                printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
-                _setup_ok=0
-              fi
+              	# Check system prerequisites
+              	if ! systemctl is-active --quiet auditd 2>/dev/null; then
+              		printf '\033[1;33m⚠ auditd is not running.\033[0m\n'
+              		printf '  The sandboxed wrapper requires auditd for violation detection.\n'
+              		printf '  Add to your NixOS config:\n'
+              		printf '    security.sandboxed.enable = true;\n'
+              		printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
+              		_setup_ok=0
+              	fi
 
-              if ! sudo -n ${pkgs.systemd}/bin/systemd-run --help >/dev/null 2>&1; then
-                printf '\033[1;33m⚠ NOPASSWD sudo for systemd-run is not configured.\033[0m\n'
-                printf '  The sandboxed wrapper needs passwordless sudo for:\n'
-                printf '    systemd-run, systemctl, auditctl, ausearch, tail\n'
-                printf '  Add to your NixOS config:\n'
-                printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
-                _setup_ok=0
-              fi
+              	if ! sudo -n ${pkgs.systemd}/bin/systemd-run --help >/dev/null 2>&1; then
+              		printf '\033[1;33m⚠ NOPASSWD sudo for systemd-run is not configured.\033[0m\n'
+              		printf '  The sandboxed wrapper needs passwordless sudo for:\n'
+              		printf '    systemd-run, systemctl, auditctl, ausearch, tail\n'
+              		printf '  Add to your NixOS config:\n'
+              		printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
+              		_setup_ok=0
+              	fi
 
-              # Check Claude credentials
-							if [ ! -s "${cfgDir}/.credentials.json" ] && [ ! -s "${cfgDir}/.claude.json" ]; then
-								printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
-								printf '  Run claude to complete OAuth login on first use.\n\n'
-								_setup_ok=0
-							fi
+              	# Check Claude credentials
+              	if [ ! -s "${cfgDir}/.credentials.json" ] && [ ! -s "${cfgDir}/.claude.json" ]; then
+              		printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
+              		printf '  Run claude to complete OAuth login on first use.\n\n'
+              		_setup_ok=0
+              	fi
 
-              if [ "$_setup_ok" -eq 1 ]; then
-                printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
-              fi
+              	if [ "$_setup_ok" -eq 1 ]; then
+              		printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
+              	fi
 
-              # Jailed Claude Code
-              claude() {
-								mkdir -p "${cfgDir}"
-								touch "${cfgDir}/.credentials.json" "${cfgDir}/.claude.json"
-                sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
-                  setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
-              }
-              alias jail-shell="setpriv --ambient-caps=-sys_nice -- jailed-shell"
+              	# Jailed Claude Code
+              	claude() {
+              		mkdir -p "$CLAUDE_CONFIG_DIR"
+              		touch "$CLAUDE_CONFIG_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+              		sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+              			setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
+              	}
+              	alias jail-shell="setpriv --ambient-caps=-sys_nice -- jailed-shell"
             '';
         };
       }
