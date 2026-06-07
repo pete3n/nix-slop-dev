@@ -58,7 +58,7 @@
         # Resolved at nix eval time — correct for local devShell builds.
         homeDir = builtins.getEnv "HOME";
         cfgDir = homeDir + "/.config/claude";
-        skillsDir = ./claude-config/skills;
+        skillsDir = ../claude-code/claude-config/skills;
 
         basePkgs = with pkgs; [
           bashInteractive

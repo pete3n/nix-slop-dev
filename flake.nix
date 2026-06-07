@@ -39,8 +39,11 @@
           path = ./templates/claude-code;
           description = "Jailed Claude Code environment with sandboxed network isolation";
         };
-        # Future templates:
-        # opencode = { path = ./templates/opencode; description = "..."; };
+
+        claude-code-nvim-dev = {
+          path = ./templates/claude-code-nvim-dev;
+          description = "Jailed Claude Code environment for Neovim plugin development with lua tooling and headless test support";
+        };
       };
     };
 }
