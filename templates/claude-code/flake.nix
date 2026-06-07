@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     nix-slop-dev.url = "github:pete3n/nix-slop-dev";
-    inputs.jail-nix.url = "sourcehut:~alexdavid/jail.nix";
+    jail-nix.url = "sourcehut:~alexdavid/jail.nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
