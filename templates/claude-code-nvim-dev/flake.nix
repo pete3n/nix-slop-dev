@@ -22,7 +22,7 @@
     let
       # Darwin not supported by the sandbox solution
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      neovim-overlay = import ./neovim-overlay.nix { inherit inputs; };
+      neovim-overlay = import ./nix/neovim-overlay.nix { inherit inputs; };
     in
     flake-utils.lib.eachSystem systems (
       system:
