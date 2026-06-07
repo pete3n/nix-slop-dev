@@ -35,7 +35,7 @@
       # Resolved at nix eval time — correct for local devShell builds.
       # Override if building for a different user or in CI.
       cfgDir = builtins.getEnv "HOME" + "/.config/claude";
-      skillsDir = ./claude-config/skills;
+      skillsDir = ./slop-env/claude-config/skills;
 
       basePkgs = with pkgs; [
         bashInteractive
