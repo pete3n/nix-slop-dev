@@ -103,7 +103,7 @@
             (tmpfs (noescape cfgDir))
             (ro-bind "${skillsDir}" "${cfgDir}/skills")
             (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
-            (write-text (noescape "${cfgDir}/CLAUDE.md") (builtins.readFile ./claude-config/CLAUDE.md))
+            (write-text (noescape "${cfgDir}/CLAUDE.md") (builtins.readFile ./slop-env/claude-config/CLAUDE.md))
 
             # Persistent runtime state
             (try-readwrite (noescape "${cfgDir}/.claude.json"))
