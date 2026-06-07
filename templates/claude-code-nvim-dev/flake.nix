@@ -22,7 +22,7 @@
     let
       # Darwin not supported by the sandbox solution
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      neovim-overlay = import ./nix/neovim-overlay.nix { inherit inputs; };
+      neovim-overlay = import ./slop-env/nix/neovim-overlay.nix { inherit inputs; };
     in
     flake-utils.lib.eachSystem systems (
       system:
@@ -55,7 +55,7 @@
         # Resolved at nix eval time — correct for local devShell builds.
         homeDir = builtins.getEnv "HOME";
         cfgDir = homeDir + "/.config/claude";
-        skillsDir = ./claude-config/skills;
+        skillsDir = ./slop-env/claude-config/skills;
 
         basePkgs = with pkgs; [
           bashInteractive
