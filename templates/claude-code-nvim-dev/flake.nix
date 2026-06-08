@@ -128,7 +128,6 @@
             (try-readwrite (noescape "~/.npm"))
             (try-readwrite (noescape "~/.local/share/claude-code"))
 
-            (try-fwd-env "CLAUDE_CONFIG_DIR")
             (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
             (add-pkg-deps (basePkgs ++ projectPkgs))
           ]
@@ -190,11 +189,12 @@
               	fi
 
               	# Check Claude credentials
-              	if [ ! -s "${cfgDir}/.credentials.json" ] && [ ! -s "${cfgDir}/.claude.json" ]; then
-              		printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
-              		printf '  Run claude to complete OAuth login on first use.\n\n'
-              		_setup_ok=0
-              	fi
+								_cfg_dir="$HOME/.config/claude"
+								if [ ! -s "$_cfg_dir/.credentials.json" ] && [ ! -s "$_cfg_dir/.claude.json" ]; then
+									printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
+									printf '  Run claude to complete OAuth login on first use.\n\n'
+									_setup_ok=0
+								fi
 
               	if [ "$_setup_ok" -eq 1 ]; then
               		printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
