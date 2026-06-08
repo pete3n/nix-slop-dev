@@ -74,6 +74,7 @@
           mount-cwd
           no-new-session
 
+          (ro-bind "${pkgs.coreutils}/bin/env" "/usr/bin/env")
           (try-readwrite (noescape "~/.claude.json"))
           (tmpfs (noescape cfgDir))
           (ro-bind "${skillsDir}" "${cfgDir}/skills")
