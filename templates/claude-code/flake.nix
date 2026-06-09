@@ -36,6 +36,23 @@
       # Override if building for a different user or in CI.
       cfgDir = builtins.getEnv "HOME" + "/.config/claude";
       skillsDir = ./slop-env/claude-config/skills;
+      rulesDir = ./slop-env/claude-config/rules;
+
+      # CLAUDE.md ships as the base file followed by every rules/*.md,
+      # concatenated so universal policy is always in context (unlike
+      # relevance-recalled memory, which is per-project and dynamically pathed).
+      claudeMd =
+        let
+          ruleNames = builtins.attrNames (
+            pkgs.lib.filterAttrs (name: kind: kind == "regular" && pkgs.lib.hasSuffix ".md" name) (
+              builtins.readDir rulesDir
+            )
+          );
+          ruleBodies = map (name: builtins.readFile (rulesDir + "/${name}")) ruleNames;
+        in
+        pkgs.lib.concatStringsSep "\n\n" (
+          [ (builtins.readFile ./slop-env/claude-config/CLAUDE.md) ] ++ ruleBodies
+        );
 
       basePkgs = with pkgs; [
         bashInteractive
@@ -43,6 +60,7 @@
         diffutils
         findutils
         gawk
+        gh
         git
         gnugrep
         gnused
@@ -80,7 +98,7 @@
           (ro-bind "${skillsDir}" "${cfgDir}/skills")
           (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
           (try-readwrite (noescape "${cfgDir}/.credentials.json"))
-          (write-text (noescape "${cfgDir}/CLAUDE.md") (builtins.readFile ./slop-env/claude-config/CLAUDE.md))
+          (write-text (noescape "${cfgDir}/CLAUDE.md") claudeMd)
 
           (try-readwrite (noescape "${cfgDir}/.claude.json"))
           (try-readwrite (noescape "${cfgDir}/.credentials.json"))
@@ -105,7 +123,7 @@
           (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
           (add-pkg-deps (basePkgs ++ projectPkgs))
         ]
-        ++ lib.mapAttrsToList (key: value: jail.combinators.set-env key value) projectEnv;
+        ++ pkgs.lib.mapAttrsToList (key: value: jail.combinators.set-env key value) projectEnv;
 
       jailedClaude = jail "jailed-claude" claude-pkg jailCombinators;
       jailedShell = jail "jailed-shell" pkgs.bashInteractive jailCombinators;
