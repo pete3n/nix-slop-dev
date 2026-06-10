@@ -122,11 +122,11 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1781022275,
-        "narHash": "sha256-GuM0m/SynTa8AANBRtBYw5D4keQbFlsO6skoUQMHAEE=",
+        "lastModified": 1781113480,
+        "narHash": "sha256-v+gW78MEdrdT1vF+tLkcSrjSwp9yM0URGPZRCapADhk=",
         "owner": "pete3n",
         "repo": "nix-slop-dev",
-        "rev": "e31abdbfc9543ee4e9149b6bfbf3945b33dc8b57",
+        "rev": "40bac3a1037b8c88d45a053affca32de8eebe9ac",
         "type": "github"
       },
       "original": {
