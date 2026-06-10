@@ -78,6 +78,7 @@
 
         basePkgs = with pkgs; [
           bashInteractive
+					bc
           coreutils
           diffutils
           findutils

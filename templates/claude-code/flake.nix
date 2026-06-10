@@ -56,7 +56,7 @@
 
       basePkgs = with pkgs; [
         bashInteractive
-        coreutils
+				bc coreutils
         diffutils
         findutils
         gawk
