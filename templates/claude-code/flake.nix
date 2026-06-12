@@ -32,9 +32,9 @@
         };
       };
 
-      # Resolved at nix eval time — correct for local devShell builds.
-      # Override if building for a different user or in CI.
-      cfgDir = builtins.getEnv "HOME" + "/.config/claude";
+      projectName = "slop-dev-project"; # Update per-project
+      sharedDir = "~/.local/state/claude/shared";
+      cfgDir = "~/.local/state/claude/projects/${projectName}";
       skillsDir = ./slop-env/claude-config/skills;
       rulesDir = ./slop-env/claude-config/rules;
 
@@ -56,7 +56,8 @@
 
       basePkgs = with pkgs; [
         bashInteractive
-				bc coreutils
+        bc
+        coreutils
         diffutils
         findutils
         gawk
@@ -93,15 +94,19 @@
           no-new-session
 
           (ro-bind "${pkgs.coreutils}/bin/env" "/usr/bin/env")
-          (try-readwrite (noescape "~/.claude.json"))
+
+          # Ephemeral config dir; project-fixed content written on top.
           (tmpfs (noescape cfgDir))
-          (ro-bind "${skillsDir}" "${cfgDir}/skills")
+          (ro-bind "${skillsDir}" (noescape "${cfgDir}/skills"))
           (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
-          (try-readwrite (noescape "${cfgDir}/.credentials.json"))
           (write-text (noescape "${cfgDir}/CLAUDE.md") claudeMd)
 
+          # Shared identity, grafted into the per-project config dir.
+          # Host file must exist before launch (touched in shellHook).
+          (rw-bind (noescape "${sharedDir}/.credentials.json") (noescape "${cfgDir}/.credentials.json"))
+
+          # Per-project persistent state.
           (try-readwrite (noescape "${cfgDir}/.claude.json"))
-          (try-readwrite (noescape "${cfgDir}/.credentials.json"))
           (try-readwrite (noescape "${cfgDir}/.last-cleanup"))
           (try-readwrite (noescape "${cfgDir}/backups"))
           (try-readwrite (noescape "${cfgDir}/history.jsonl"))
@@ -115,6 +120,8 @@
           (try-readwrite (noescape "${cfgDir}/statsig"))
           (try-readwrite (noescape "${cfgDir}/todos"))
 
+          # Shared caches — safe to share, contents are content-addressed
+          # or per-package, not per-session state.
           (try-readwrite (noescape "~/.cache"))
           (try-readwrite (noescape "~/.npm"))
           (try-readwrite (noescape "~/.local/share/claude-code"))
@@ -137,7 +144,13 @@
         ];
         shellHook = # sh
           ''
-            export CLAUDE_CONFIG_DIR="$HOME/.config/claude"
+            # Project unique config
+            export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+            export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
+            mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+            touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+
+            # Setup checks
             _setup_ok=1
 
             # Check system prerequisites
@@ -160,8 +173,7 @@
             fi
 
             # Check Claude credentials
-            _cfg_dir="$HOME/.config/claude"
-            if [ ! -s "$_cfg_dir/.credentials.json" ] && [ ! -s "$_cfg_dir/.claude.json" ]; then
+            if [ ! -s "$CLAUDE_SHARED_DIR/.credentials.json" ]; then
             	printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
             	printf '  Run claude to complete OAuth login on first use.\n\n'
             	_setup_ok=0
@@ -173,8 +185,8 @@
 
             # Jailed Claude Code
             claude() {
-            	mkdir -p "$CLAUDE_CONFIG_DIR"
-            	touch "$CLAUDE_CONFIG_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+            	mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+            	touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
             	sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
             		-e CLAUDE_CONFIG_DIR \
             		setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
