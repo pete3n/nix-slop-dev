@@ -71,6 +71,26 @@ auditd_install_cmd() {
 	esac
 }
 
+# Render an AppArmor profile that lifts Ubuntu 23.10+/24.04's unprivileged
+# user-namespace restriction for bubblewrap. The profile attaches to the
+# bwrap store-path glob (not a fixed path) so it stays valid when a flake
+# update changes bwrap's /nix/store hash, and grants the userns permission
+# while otherwise leaving the program unconfined.
+apparmor_profile_content() {
+	profile_name="$1"
+	bwrap_glob="$2"
+
+	printf '%s\n' \
+		"abi <abi/4.0>," \
+		"include <tunables/global>" \
+		"" \
+		"profile ${profile_name} \"${bwrap_glob}\" flags=(unconfined) {" \
+		"  userns," \
+		"" \
+		"  include if exists <local/${profile_name}>" \
+		"}"
+}
+
 # Compute the idempotent change plan from two satisfied-booleans (1 = already
 # in place, 0 = needs action): the sudoers drop-in and auditd. Prints one line
 # per planned action, in apply order; prints nothing when the host is already
@@ -78,12 +98,18 @@ auditd_install_cmd() {
 plan_actions() {
 	sudoers_ok="$1"
 	auditd_ok="$2"
+	# Optional: 1 = unprivileged userns permitted (no profile needed). Absent
+	# defaults to satisfied, preserving the original two-argument behavior.
+	userns_ok="${3:-1}"
 
 	if [ "$auditd_ok" != "1" ]; then
 		printf 'install and enable auditd\n'
 	fi
 	if [ "$sudoers_ok" != "1" ]; then
 		printf 'write /etc/sudoers.d/sandboxed\n'
+	fi
+	if [ "$userns_ok" != "1" ]; then
+		printf 'install AppArmor profile permitting unprivileged user namespaces for bubblewrap\n'
 	fi
 	return 0
 }

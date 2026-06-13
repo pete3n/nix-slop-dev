@@ -70,6 +70,9 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     _run_apply_mode() {
     	apply_user="$(${pkgs.coreutils}/bin/id -un)"
     	distro_id="$(_detect_distro_id)"
+    	apparmor_profile_name=nix-slop-dev-bwrap
+    	apparmor_profile_path="/etc/apparmor.d/''${apparmor_profile_name}"
+    	bwrap_glob='/nix/store/*/bin/bwrap'
 
     	if [ -f "$sudoers_file" ]; then sudoers_ok=1; else sudoers_ok=0; fi
     	if [ "$(systemctl is-active auditd 2>/dev/null || true)" = active ]; then
@@ -77,8 +80,15 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	else
     		auditd_ok=0
     	fi
+    	# Ubuntu 23.10+/24.04 restricts unprivileged userns when the sysctl is 1.
+    	if [ "$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)" = 1 ]; then
+    		userns_ok=0
+    	else
+    		userns_ok=1
+    		printf 'setup-linux: unprivileged user namespaces permitted; no AppArmor profile needed.\n'
+    	fi
 
-    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok")"
+    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok")"
     	if [ -z "$plan" ]; then
     		printf 'setup-linux: already configured; nothing to do.\n'
     		exit 0
@@ -92,6 +102,13 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		y | Y | yes | YES) ;;
     		*)
     			printf 'Aborted; no changes made.\n'
+    			if [ "$userns_ok" != 1 ]; then
+    				printf '\nTo permit unprivileged user namespaces for bubblewrap manually,\n'
+    				printf 'write the following to %s, then run `sudo apparmor_parser -r %s`:\n\n' \
+    					"$apparmor_profile_path" "$apparmor_profile_path"
+    				apparmor_profile_content "$apparmor_profile_name" "$bwrap_glob" \
+    					| ${pkgs.gnused}/bin/sed 's/^/    /'
+    			fi
     			exit 0
     			;;
     	esac
@@ -132,6 +149,23 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		else
     			${pkgs.coreutils}/bin/rm -f "$tmp_sudoers"
     			printf >&2 'setup-linux: generated sudoers failed validation; not installed.\n'
+    			exit 1
+    		fi
+    	fi
+
+    	# Install the AppArmor profile that lifts the unprivileged-userns
+    	# restriction for bubblewrap, validated before it is loaded.
+    	if [ "$userns_ok" != 1 ]; then
+    		tmp_aa="$(${pkgs.coreutils}/bin/mktemp)"
+    		apparmor_profile_content "$apparmor_profile_name" "$bwrap_glob" > "$tmp_aa"
+    		if sudo apparmor_parser -Q "$tmp_aa" >/dev/null 2>&1; then
+    			sudo ${pkgs.coreutils}/bin/install -m 0644 -o root -g root \
+    				"$tmp_aa" "$apparmor_profile_path"
+    			sudo apparmor_parser -r "$apparmor_profile_path"
+    			${pkgs.coreutils}/bin/rm -f "$tmp_aa"
+    		else
+    			${pkgs.coreutils}/bin/rm -f "$tmp_aa"
+    			printf >&2 'setup-linux: AppArmor profile failed to parse; not installed.\n'
     			exit 1
     		fi
     	fi

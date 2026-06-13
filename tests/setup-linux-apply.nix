@@ -96,5 +96,38 @@ $plan"
     || fail "fully-unconfigured host should plan two actions; got:
 $plan"
 
+  # apparmor_profile_content renders a profile that attaches to the bubblewrap
+  # store-path glob (the glob is what survives flake updates) and grants the
+  # userns permission so the Jail works under the Ubuntu 24.04 restriction.
+  profile=$(apparmor_profile_content nix-slop-dev-bwrap '/nix/store/*/bin/bwrap')
+  case "$profile" in
+    *'/nix/store/*/bin/bwrap'*) ;;
+    *) fail "apparmor profile missing the bwrap store-path glob; got:
+$profile" ;;
+  esac
+  case "$profile" in *userns*) ;; *) fail "apparmor profile missing 'userns' rule; got:
+$profile" ;; esac
+  case "$profile" in *nix-slop-dev-bwrap*) ;; *) fail "apparmor profile missing profile name; got:
+$profile" ;; esac
+
+  # plan_actions takes an optional third userns-satisfied boolean (default 1).
+  # When the restriction is active (0), it adds the AppArmor profile action.
+  plan=$(plan_actions 1 1 0)
+  case "$plan" in *namespace*) ;; *) fail "restricted-userns plan should mention user namespaces; got: $plan" ;; esac
+
+  plan=$(plan_actions 1 1 1)
+  [ -z "$plan" ] || fail "unrestricted userns with everything else configured should be a no-op; got:
+$plan"
+
+  # Omitting the third argument preserves the prior two-argument behavior.
+  plan=$(plan_actions 1 1)
+  [ -z "$plan" ] || fail "two-arg plan_actions should treat userns as satisfied; got:
+$plan"
+
+  plan=$(plan_actions 0 0 0)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 3 ] \
+    || fail "fully-unconfigured + restricted userns should plan three actions; got:
+$plan"
+
   touch "$out"
 ''
