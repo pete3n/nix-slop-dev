@@ -184,6 +184,14 @@
             inherit nixpkgs pkgs system;
             sandboxedModule = self.nixosModules.sandboxed;
           };
+
+          # Slice 20 (#02): sandboxed wrapper --print-tools exercises the
+          # runtime NixOS detection (store paths vs bare names) without a
+          # real NixOS host.
+          wrapper-tool-resolution = import ./tests/wrapper-tool-resolution.nix {
+            inherit pkgs;
+            sandboxed = self.packages.${system}.sandboxed;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {

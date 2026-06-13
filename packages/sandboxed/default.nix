@@ -11,6 +11,11 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     STAMP=""
     AUDIT_KEY=""
     UNIT=""
+    SYSTEMD_RUN=""
+    SYSTEMCTL=""
+    TAIL=""
+    AUDITCTL=""
+    AUSEARCH=""
     wl_dir="''${HOME}/${stateDir}"
     wl_file="''${wl_dir}/whitelist"
     wl_entry=""
@@ -20,6 +25,40 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     allowed_re=""
     env_fwd=()
     watch_pid=""
+
+    # ADR-0002: resolve the five privileged tools that sudo invokes. On NixOS
+    # (marker present) use embedded Nix store paths kept in sync by the NixOS
+    # module. Elsewhere invoke bare names so sudo's secure_path resolves the
+    # host binaries — a store-pinned client could version-skew against the
+    # host systemd/audit daemons, and a store-path sudoers file would break on
+    # every flake update. The marker defaults to /etc/NIXOS; it is overridable
+    # by argument only for diagnostics/tests, never from the environment.
+    _resolve_privileged_tools() {
+    	if [ -f "''${1:-/etc/NIXOS}" ]; then
+    		SYSTEMD_RUN="${pkgs.systemd}/bin/systemd-run"
+    		SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
+    		TAIL="${pkgs.coreutils}/bin/tail"
+    		AUDITCTL="${pkgs.audit}/bin/auditctl"
+    		AUSEARCH="${pkgs.audit}/bin/ausearch"
+    	else
+    		SYSTEMD_RUN="systemd-run"
+    		SYSTEMCTL="systemctl"
+    		TAIL="tail"
+    		AUDITCTL="auditctl"
+    		AUSEARCH="ausearch"
+    	fi
+    }
+
+    _print_tools() {
+    	_resolve_privileged_tools "''${1:-}"
+    	printf '%s\n' \
+    		"systemd-run=''${SYSTEMD_RUN}" \
+    		"systemctl=''${SYSTEMCTL}" \
+    		"tail=''${TAIL}" \
+    		"auditctl=''${AUDITCTL}" \
+    		"ausearch=''${AUSEARCH}"
+    	exit 0
+    }
 
     _usage() {
     	printf >&2 '%s\n' \
@@ -39,7 +78,8 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     	"  --wl-add   Add to persistent whitelist (updates running sandboxes)" \
     	"  --wl-del   Remove from persistent whitelist (next session)" \
     	"  --wl-list  Show current whitelist" \
-    	"  --log      Search audit log for sandbox violations"
+    	"  --log      Search audit log for sandbox violations" \
+    	"  --print-tools  Show how privileged tools resolve on this host"
     	exit 1
     }
 
@@ -91,13 +131,13 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			while IFS= read -r _ip; do
     				[ -z "$_ip" ] && continue
     				case "$_ip" in
-    					*/*) sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}" ;;
-    					*:*) sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}/128" ;;
-    					*)   sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}/32" ;;
+    					*/*) sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}" ;;
+    					*:*) sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}/128" ;;
+    					*)   sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}/32" ;;
     				esac
     			done <<< "$_ips"
     			_updated=$((_updated + 1))
-    		done < <(${pkgs.systemd}/bin/systemctl list-units \
+    		done < <("$SYSTEMCTL" list-units \
     			--type=service --state=running --no-legend \
     			| ${pkgs.gnugrep}/bin/grep 'sandbox-' \
     			| ${pkgs.gawk}/bin/awk '{print $1}')
@@ -139,7 +179,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     _sandbox_log() {
     	_key="''${1:-sandbox-}"
     	_since="''${2:-today}"
-    	sudo ${pkgs.audit}/bin/ausearch \
+    	sudo "$AUSEARCH" \
     		-k "$_key" \
     		--start "$_since" \
     		--raw \
@@ -238,19 +278,26 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     }
 
     _cleanup() {
-    	sudo ${pkgs.audit}/bin/auditctl \
+    	sudo "$AUDITCTL" \
     		-d always,exit -F arch=b64 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
-    	sudo ${pkgs.audit}/bin/auditctl \
+    	sudo "$AUDITCTL" \
     		-d always,exit -F arch=b32 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	[ -n "''${watch_pid:-}" ] && kill "''${watch_pid}" 2>/dev/null || true
     }
 
+    _resolve_privileged_tools
+
     while [ $# -gt 0 ]; do
     	case "''${1}" in
+    	--print-tools)
+    		shift
+    		_print_tools "''${1:-}"
+    		;;
+
     	--wl-add)
     		shift
     		_wl_add "$@"
@@ -336,17 +383,17 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     # Clean stale sandbox audit rules from previous sessions whose
     # cleanup traps did not fire
-    sudo ${pkgs.audit}/bin/auditctl -l 2>/dev/null \
+    sudo "$AUDITCTL" -l 2>/dev/null \
     	| ${pkgs.gnugrep}/bin/grep 'key=sandbox-' \
     	| while IFS= read -r _rule; do
-    		sudo ${pkgs.audit}/bin/auditctl -d "''${_rule#-a }" 2>/dev/null || true
+    		sudo "$AUDITCTL" -d "''${_rule#-a }" 2>/dev/null || true
     	done
 
-    sudo ${pkgs.audit}/bin/auditctl \
+    sudo "$AUDITCTL" \
     	-a always,exit -F arch=b64 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
-    sudo ${pkgs.audit}/bin/auditctl \
+    sudo "$AUDITCTL" \
     	-a always,exit -F arch=b32 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
@@ -360,7 +407,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     # flagging external blocked connects where no SOCKADDR arrives (items=0).
     watch_pid=""
     if [ "$quiet" -eq 0 ]; then
-    	sudo ${pkgs.coreutils}/bin/tail -f /var/log/audit/audit.log 2>/dev/null \
+    	sudo "$TAIL" -f /var/log/audit/audit.log 2>/dev/null \
     	| ${pkgs.gawk}/bin/awk \
     			-v _key="''${AUDIT_KEY}" \
     			-v _allowed_re="''${allowed_re}" \
@@ -411,7 +458,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     fi
 
     printf 'sandboxed: [%s] starting %s\n' "''${AUDIT_KEY}" "''${BINARY}" >&2
-    sudo ${pkgs.systemd}/bin/systemd-run \
+    sudo "$SYSTEMD_RUN" \
     	--pty \
     	--same-dir \
     	--wait \
