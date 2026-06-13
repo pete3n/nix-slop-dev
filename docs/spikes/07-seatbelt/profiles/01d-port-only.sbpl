@@ -1,0 +1,5 @@
+;; Probe A variant: port-only filter ((remote ip "*:80")), to confirm port works
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "*:80"))

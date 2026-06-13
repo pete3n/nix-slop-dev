@@ -1,0 +1,5 @@
+;; Probe: does (literal "...") under network-outbound actually filter, or is it a no-op?
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (literal "1.1.1.1"))
