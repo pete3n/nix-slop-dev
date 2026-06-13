@@ -33,6 +33,7 @@
         in
         {
           sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
+          setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
           default = self.packages.${system}.sandboxed;
         }
       );
@@ -192,6 +193,19 @@
             inherit pkgs;
             sandboxed = self.packages.${system}.sandboxed;
           };
+
+          # Slice 20 (#03): setup-linux check-only mode uses a pure
+          # check-lib.sh evaluator driven by fixtures, so we cover every
+          # prerequisite branch without a real Ubuntu/Fedora host. The
+          # -app companion smoke-tests the wired-up nix run entry point.
+          setup-linux-checks = import ./tests/setup-linux-checks.nix {
+            inherit pkgs;
+          };
+
+          setup-linux-app = import ./tests/setup-linux-app.nix {
+            inherit pkgs;
+            setupLinux = self.packages.${system}.setup-linux;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
@@ -213,6 +227,9 @@
       # root without touching the project's flake.nix. The lib-bundled
       # defaults (lib/slop-env/defaults/) feed mkBins's CLAUDE.md / rules
       # when no caller-supplied paths are given.
+      #
+      # Slice 20 (#03) adds setup-linux for non-NixOS hosts (diagnoses
+      # Sandbox/Jail prerequisites; --apply mode lands in #04).
       apps = forAllSystems (
         system:
         let
@@ -227,6 +244,10 @@
           jail-shell = {
             type = "app";
             program = "${bins.jail-shell}/bin/jail-shell";
+          };
+          setup-linux = {
+            type = "app";
+            program = "${self.packages.${system}.setup-linux}/bin/setup-linux";
           };
         }
       );
