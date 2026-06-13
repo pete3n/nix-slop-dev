@@ -176,6 +176,14 @@
               ''
             else
               throw "extraSandboxedEnvForwards arg did not add an -e flag to the claude() sandboxed call";
+
+          # Slice 20 (#01): NixOS module evaluation — asserts user@
+          # sessions carry no cgroup Delegate after the dead BPF
+          # delegation was removed from modules/sandboxed/default.nix.
+          nixos-module = import ./tests/nixos-module.nix {
+            inherit nixpkgs pkgs system;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {

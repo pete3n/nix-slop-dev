@@ -40,10 +40,6 @@ in
     security.audit.enable = true;
     security.auditd.enable = true;
 
-    # Delegate bpf-firewall to user sessions so systemd-run
-    # transient units can use IPAddressDeny/IPAddressAllow
-    systemd.services."user@".serviceConfig.Delegate = "cpu memory pids bpf-firewall";
-
     # Install sandboxed system-wide
     environment.systemPackages = [ cfg.package ];
 
