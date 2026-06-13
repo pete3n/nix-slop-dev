@@ -206,6 +206,14 @@
             inherit pkgs;
             setupLinux = self.packages.${system}.setup-linux;
           };
+
+          # Slice 20 (#04): --apply mode's pure planning + sudoers /
+          # tool-path / auditd-install logic is fixture-driven via
+          # apply-lib.sh, so we cover every distro branch without
+          # mutating any host.
+          setup-linux-apply = import ./tests/setup-linux-apply.nix {
+            inherit pkgs;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
@@ -229,7 +237,8 @@
       # when no caller-supplied paths are given.
       #
       # Slice 20 (#03) adds setup-linux for non-NixOS hosts (diagnoses
-      # Sandbox/Jail prerequisites; --apply mode lands in #04).
+      # Sandbox/Jail prerequisites; #04 adds --apply mode behind the same
+      # entry point).
       apps = forAllSystems (
         system:
         let
