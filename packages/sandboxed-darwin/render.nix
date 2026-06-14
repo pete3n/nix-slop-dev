@@ -176,9 +176,58 @@ in
       then lib.concatMapStrings (e: mkLine e + "\n") jail.jailData.hostResolve
       else "";
 
+  # Issue 16: the wrapper-side block that partitions `wl_runtime` into
+  # IPv4 literals (which become Seatbelt `(allow network-outbound (remote
+  # ip "<ip>:*"))` rules in `_ip_block_file`) vs hostnames and CIDR/IPv6
+  # entries (which stay in `wl_runtime` for the proxy to handle). The
+  # case-glob mirrors the Linux wrapper's IPv4 heuristic in
+  # `packages/sandboxed/default.nix` (the `[0-9]*.[0-9]*.[0-9]*.[0-9]*`
+  # arm) so the cross-platform classification stays consistent.
+  #
+  # CIDR (`*/*`) and IPv6 (`*:*`) entries are explicitly skipped — the
+  # issue-16 design defers them to follow-ups (Seatbelt `(remote ip)`
+  # syntax doesn't natively accept CIDR; IPv6 literal SBPL shape needs a
+  # spike). Skipping them means CIDR/IPv6 entries on macOS work for proxy
+  # TCP traffic only, with no L3 carve-out. The HITL surface for this
+  # gap is: `--wl-add 10.0.0.0/24` followed by `ping 10.0.0.5` will fail
+  # under Seatbelt even though the proxy would accept TCP to that IP.
+  #
+  # Returns the bash text only; the caller (`packages/sandboxed-darwin/
+  # default.nix`) is responsible for setting `_ip_block_file` and
+  # ensuring `wl_runtime` exists before this block runs.
+  mkIpAllowListBlock = { }: ''
+    : > "$_ip_block_file"
+    while IFS= read -r _wl_entry; do
+    	case "$_wl_entry" in
+    		""|\#*) ;;
+    		*/*) ;;
+    		*:*) ;;
+    		[0-9]*.[0-9]*.[0-9]*.[0-9]*)
+    			printf '%s\n' "(allow network-outbound (remote ip \"$_wl_entry:*\"))" >> "$_ip_block_file"
+    			;;
+    		*) ;;
+    	esac
+    done < "$wl_runtime"
+  '';
+
+  # Issue 16: the IP-allowlist splice is always present — the SBPL template
+  # always carries an `__IPALLOWLIST__` placeholder line. The two sed
+  # clauses `/.../{r FILE` + `d}` form a block: GNU sed `r` reads FILE's
+  # content and queues it to print after the current cycle ends, then `d`
+  # deletes the placeholder line. Net result: the placeholder line is
+  # replaced by FILE's content. When FILE is empty, `r` reads nothing
+  # and `d` alone removes the placeholder — preserves byte-equality with
+  # the pre-issue-16 profile shape for hostname-only whitelists.
+  #
+  # The `${_ip_block_file}` bash variable is set by the wrapper in
+  # default.nix BEFORE this sed pipeline runs. Keeping the splice as
+  # two `-e` args (not one combined expression) is the canonical GNU sed
+  # idiom for "replace line with file contents".
   mkProfileSedPipeline = { jail ? null }:
     let
       proxyPortSub = ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'';
+      ipAllowListReadClause = ''-e "/__IPALLOWLIST__/{r ''${_ip_block_file}"'';
+      ipAllowListDeleteClause = ''-e "d}"'';
       hasJail = jail != null && jail ? jailData;
       staticJailSubs = lib.optionals hasJail [
         ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"''
@@ -190,5 +239,8 @@ in
           in ''-e "s|${entry.placeholder}|''${_jail_hr_${key}}|g"'')
           (jail.jailData.hostResolve or [ ]));
     in lib.concatStringsSep " "
-      ([ proxyPortSub ] ++ staticJailSubs ++ hostResolveSubs);
+      ([ proxyPortSub ]
+        ++ staticJailSubs
+        ++ hostResolveSubs
+        ++ [ ipAllowListReadClause ipAllowListDeleteClause ]);
 }

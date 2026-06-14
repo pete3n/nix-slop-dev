@@ -58,11 +58,17 @@ let
           (deny file-write*)
         '';
       };
+      # Issue 16: template emits an `__IPALLOWLIST__` placeholder line
+      # between the loopback allow and the jailFragment. The wrapper's sed
+      # pipeline swaps the line at runtime for the assembled IP allow
+      # block (or removes the line via `d` when no IP literals are in the
+      # whitelist — net result byte-identical to the pre-issue-16 shape).
       expected = ''
         (version 1)
         (allow default)
         (deny network-outbound)
         (allow network-outbound (remote ip "localhost:__PROXYPORT__"))
+        __IPALLOWLIST__
         (deny file-write*)
       '';
     };
@@ -74,7 +80,32 @@ let
         (allow default)
         (deny network-outbound)
         (allow network-outbound (remote ip "localhost:__PROXYPORT__"))
+        __IPALLOWLIST__
       '';
+    };
+
+    # Issue 16: custom placeholder for ipAllowListPlaceholder. Mirrors the
+    # portPlaceholder customisation contract — lets future templates use a
+    # different sentinel without code changes.
+    testTemplateCustomIpAllowListPlaceholder = {
+      expr = let
+        rendered = mkSandboxProfileTemplate {
+          ipAllowListPlaceholder = "@@IPS@@";
+        };
+      in {
+        substituted = lib.hasInfix "@@IPS@@" rendered;
+        defaultAbsent = !(lib.hasInfix "__IPALLOWLIST__" rendered);
+      };
+      expected = {
+        substituted = true;
+        defaultAbsent = true;
+      };
+    };
+
+    testTemplateRejectsEmptyIpAllowListPlaceholder = {
+      expr = (builtins.tryEval
+        (mkSandboxProfileTemplate { ipAllowListPlaceholder = ""; })).success;
+      expected = false;
     };
 
     testVersionHeader = {
@@ -131,6 +162,118 @@ let
         (deny network-outbound)
         (allow network-outbound (remote ip "localhost:8080"))
       '';
+    };
+
+    # Issue 16 tracer: `mkSandboxProfile` accepts an optional `ipAllowList`
+    # arg. When empty (default), the rendered profile is byte-for-byte
+    # identical to the pre-issue-16 shape — no stray blank line, no
+    # placeholder. This pins the backwards-compat contract so existing
+    # callers that don't set ipAllowList stay unaffected. Empty list is
+    # the common case for hostname-only whitelists.
+    testEmptyIpAllowListIsBaselineByteForByte = {
+      expr = mkSandboxProfile { proxyPort = 8080; ipAllowList = [ ]; };
+      expected = ''
+        (version 1)
+        (allow default)
+        (deny network-outbound)
+        (allow network-outbound (remote ip "localhost:8080"))
+      '';
+    };
+
+    # Issue 16: one IP-literal whitelist entry emits one
+    # `(allow network-outbound (remote ip "<ip>:*"))` line, slotted between
+    # the loopback-to-proxy allow and the jail fragment. `:*` is the SBPL
+    # port wildcard — matches any L4 port AND non-TCP/UDP traffic (ICMP,
+    # raw sockets), giving NixOS IPAddressAllow-style L3 passthrough. The
+    # line lands AFTER the deny (so last-match-wins permits) and AFTER the
+    # loopback allow (so the rendered diff stays stable across single vs
+    # multi-IP cases).
+    testSingleIpAllowListRendersAllowLine = {
+      expr = mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = [ "192.168.1.1" ];
+      };
+      expected = ''
+        (version 1)
+        (allow default)
+        (deny network-outbound)
+        (allow network-outbound (remote ip "localhost:8080"))
+        (allow network-outbound (remote ip "192.168.1.1:*"))
+      '';
+    };
+
+    # Issue 16: IP allows precede jailFragment. Pins the splice point so a
+    # future refactor of the buildProfile composition can't accidentally
+    # let the jail's `(deny default)` or any future jail-fragment-emitted
+    # `(deny network*)` shadow the IP allows (jail fragments are pure
+    # filesystem today but the contract is structural — IP allows live
+    # in the network rule block).
+    testIpAllowListPrecedesJailFragment = {
+      expr = mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = [ "192.168.1.1" ];
+        jailFragment = ''
+          (deny file-write*)
+        '';
+      };
+      expected = ''
+        (version 1)
+        (allow default)
+        (deny network-outbound)
+        (allow network-outbound (remote ip "localhost:8080"))
+        (allow network-outbound (remote ip "192.168.1.1:*"))
+        (deny file-write*)
+      '';
+    };
+
+    # Issue 16: multiple IPs render in list order. List-order is the diff-
+    # stability contract — the wrapper builds the runtime IP block from
+    # wl_runtime, which preserves insert order (--wl-add appends; -a is
+    # appended after the file). Order-sensitive tests catch a bug where
+    # impl uses `lib.attrNames` (sorts) or similar non-stable iteration.
+    testMultipleIpAllowListPreservesOrder = {
+      expr = mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = [ "192.168.1.1" "10.0.0.5" "172.16.0.1" ];
+      };
+      expected = ''
+        (version 1)
+        (allow default)
+        (deny network-outbound)
+        (allow network-outbound (remote ip "localhost:8080"))
+        (allow network-outbound (remote ip "192.168.1.1:*"))
+        (allow network-outbound (remote ip "10.0.0.5:*"))
+        (allow network-outbound (remote ip "172.16.0.1:*"))
+      '';
+    };
+
+    # Issue 16: an empty string in ipAllowList would render as
+    # `(remote ip ":*")` — Seatbelt would either reject the profile at
+    # load time (opaque rc=65) or treat the empty host as a wildcard.
+    # Either way it's a footgun; fail fast at eval time with a clear
+    # message. Same for non-string entries (e.g. integers from a typo).
+    testRejectsEmptyStringInIpAllowList = {
+      expr = (builtins.tryEval (mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = [ "192.168.1.1" "" ];
+      })).success;
+      expected = false;
+    };
+
+    testRejectsNonStringInIpAllowList = {
+      expr = (builtins.tryEval (mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = [ "192.168.1.1" 42 ];
+      })).success;
+      expected = false;
+    };
+
+    testRejectsNonListIpAllowList = {
+      expr = (builtins.tryEval (mkSandboxProfile {
+        proxyPort = 8080;
+        ipAllowList = "192.168.1.1";
+      })).success;
+      expected = false;
     };
 
     # jailFragment is the Jail's filesystem profile fragment (issue 11):

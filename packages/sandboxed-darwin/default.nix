@@ -360,6 +360,14 @@ pkgs.writeShellScriptBin binName # bash
     	printf '%s\n' "$_host" >> "$wl_runtime"
     done
 
+    # Issue 16: partition wl_runtime into IPv4 literals (→ _ip_block_file,
+    # spliced into the SBPL profile so ICMP / arbitrary L4 to the IP works
+    # directly via Seatbelt, matching Linux IPAddressAllow semantics) vs
+    # everything else (hostnames + CIDR + IPv6 — stay in wl_runtime for
+    # the proxy to handle TCP/SOCKS only). CIDR and IPv6 are deferred to
+    # follow-ups; see render.mkIpAllowListBlock for the rationale.
+    _ip_block_file="''${tmp_dir}/ipallows.sbpl"
+    ${render.mkIpAllowListBlock { }}
     # Spawn the proxy on a kernel-picked loopback port. Read the assigned
     # address back from its stderr (main.go prints `listening on 127.0.0.1:<port>`).
     # The proxy's stderr is the canonical issue-09 log: one JSON record per

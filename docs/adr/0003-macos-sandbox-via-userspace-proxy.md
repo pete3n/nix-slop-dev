@@ -58,3 +58,42 @@ needs no MITM and the in-flight bytes stay opaque to the proxy.
 - ADR-0001's filesystem-boundary consequences (no `--wl-add` running-session
   update, no nested `sandbox-exec`, no bind-mounts → config materialisation,
   unified-log violation reads) stand unchanged.
+
+## Addendum (issue 16): IP-literal carve-out for L3 parity with Linux
+
+The proxy is HTTP `CONNECT` + SOCKS5: TCP-only. Linux's
+`IPAddressAllow=<cidr>` (systemd cgroup eBPF) is L3: it permits ICMP, raw
+sockets, and arbitrary L4 protocols to allowed IPs. Without a parity fix
+`ping 192.168.1.1` fails on macOS even when the IP is in the whitelist —
+the deny-default Seatbelt rule fires on the ICMP send before the proxy
+ever sees the request.
+
+We close this gap with a **per-IP-literal Seatbelt allow rule** emitted
+alongside the loopback proxy pin. For each IPv4 literal in the runtime
+whitelist (persistent file + `-a` flag), the wrapper emits one
+`(allow network-outbound (remote ip "<ip>:*"))` line into the profile
+before `sandbox-exec` loads it. The wildcard port covers TCP, UDP, and
+non-port protocols (ICMP, raw sockets). Spike 07's finding that
+`remote ip` rejects IP literals does NOT apply: that finding was about
+the `host` portion of `(remote ip "host:port")`; literal IPv4 octets
+ARE accepted there — the parser only rejects the special non-octet
+forms beyond `*` and `localhost`. (Verified empirically during issue 16
+HITL.)
+
+Hostnames remain exclusively on the proxy. They were never candidates
+for direct L3 access — proxy-side hostname enforcement is what provides
+the dynamic-DNS + cert/SNI inspection guarantees this ADR's threat model
+relies on. `ping example.com` continues to fail on macOS by design.
+
+CIDR (`*/*`) and IPv6 (`*:*`) whitelist entries are passed through to
+the proxy for TCP only (no L3 carve-out yet). The macOS SBPL `(remote
+ip)` syntax does not natively accept CIDR; expanding a CIDR into per-host
+allow lines is impractical for anything larger than /28. IPv6 literal
+SBPL shape (likely `(remote ip "[2001:db8::1]:*")` form) needs an
+empirical spike. Both gaps are tracked as follow-up issues.
+
+The runtime composition uses GNU sed's `r filename` + `d` block idiom to
+splice an `__IPALLOWLIST__` placeholder line in the SBPL template with
+the assembled IP allow block — or to delete the placeholder when no IP
+literals are present, preserving byte-equality with the pre-issue-16
+profile shape for hostname-only whitelists.

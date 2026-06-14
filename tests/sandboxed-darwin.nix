@@ -135,6 +135,49 @@ let
       };
     };
 
+    # Issue 16: the sed pipeline ALWAYS includes the IP-allowlist splice
+    # clauses — regardless of jail mode, the SBPL template always carries
+    # an `__IPALLOWLIST__` placeholder line that must be either replaced
+    # (when wl_runtime contains IP literals) or deleted (when it doesn't).
+    # GNU sed `r filename` reads the file's content into the output stream
+    # after the current cycle, and `d` deletes the placeholder line so the
+    # block file's content takes its place. When the block file is empty,
+    # `r` reads nothing and `d` alone removes the placeholder — net result
+    # byte-identical to the pre-issue-16 profile shape.
+    testSedPipelineIncludesIpAllowListSpliceClauses = {
+      expr = let
+        pipelineNoJail = render.mkProfileSedPipeline { };
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [ ];
+            mainBin = "/nix/store/fake/bin/ipallow-sed";
+          };
+        };
+        pipelineWithJail = render.mkProfileSedPipeline { jail = fakeJail; };
+      in {
+        noJailHasReadClause = lib.hasInfix
+          ''-e "/__IPALLOWLIST__/{r ''${_ip_block_file}"'' pipelineNoJail;
+        noJailHasDeleteClause = lib.hasInfix
+          ''-e "d}"'' pipelineNoJail;
+        withJailHasReadClause = lib.hasInfix
+          ''-e "/__IPALLOWLIST__/{r ''${_ip_block_file}"'' pipelineWithJail;
+        withJailHasDeleteClause = lib.hasInfix
+          ''-e "d}"'' pipelineWithJail;
+      };
+      expected = {
+        noJailHasReadClause = true;
+        noJailHasDeleteClause = true;
+        withJailHasReadClause = true;
+        withJailHasDeleteClause = true;
+      };
+    };
+
     # Slice 4: preflight. When the wrapper is built with a jail, every
     # snippet in jailData.preflight runs before sandbox-exec. Each snippet
     # is one bash line; failures abort the wrapper because the surrounding
@@ -631,6 +674,33 @@ let
         readlinkBin = "/fake/readlink";
       };
       expected = "";
+    };
+
+    # Issue 16: the wrapper-side block that partitions `wl_runtime` into
+    # IPv4 literals (→ `_ip_block_file`) vs everything else (→ stays in
+    # `wl_runtime` for the proxy). The helper returns the bash text the
+    # wrapper splices in; the actual `_ip_block_file` value is set by the
+    # caller (template var `_ip_block_file`) so this helper stays free of
+    # the broader wrapper context. Tested for text shape because the bash
+    # itself is HITL-validated end-to-end; the test catches a silent
+    # regression where the case-glob loses an arm or the printf misnames
+    # the SBPL operator.
+    testIpAllowListPartitionEmitsCaseGlobAndAllowLine = {
+      expr = render.mkIpAllowListBlock { };
+      expected = ''
+        : > "$_ip_block_file"
+        while IFS= read -r _wl_entry; do
+        	case "$_wl_entry" in
+        		""|\#*) ;;
+        		*/*) ;;
+        		*:*) ;;
+        		[0-9]*.[0-9]*.[0-9]*.[0-9]*)
+        			printf '%s\n' "(allow network-outbound (remote ip \"$_wl_entry:*\"))" >> "$_ip_block_file"
+        			;;
+        		*) ;;
+        	esac
+        done < "$wl_runtime"
+      '';
     };
 
     # Slice 0 (issue 12 prerequisite): the wrapper's bin name must be
