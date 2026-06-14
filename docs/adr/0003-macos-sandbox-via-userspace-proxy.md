@@ -58,3 +58,51 @@ needs no MITM and the in-flight bytes stay opaque to the proxy.
 - ADR-0001's filesystem-boundary consequences (no `--wl-add` running-session
   update, no nested `sandbox-exec`, no bind-mounts → config materialisation,
   unified-log violation reads) stand unchanged.
+
+## Addendum (issue 16): L3 parity with Linux's `IPAddressAllow` is not implementable
+
+Linux's `IPAddressAllow=<cidr>` (systemd cgroup eBPF) is L3-level: ICMP,
+raw sockets, and arbitrary L4 protocols to allowed IPs all pass. macOS
+has no equivalent at the Seatbelt profile layer. Issue 16 attempted to
+emit per-IP `(allow network-outbound (remote ip "<ip>:*"))` rules; HITL
+on macOS 15.6.1 reproduced spike 07's structural rejection
+(`host must be * or localhost in network address`). The implementation
+was reverted (commit 7cf51d8).
+
+What this means concretely:
+
+- **TCP to whitelisted IP literals already works** via the existing
+  proxy path. The proxy's matcher
+  (`packages/sandbox-proxy/whitelist/whitelist.go`) accepts IP literals
+  as exact-match keys and CIDRs via `net.ParseCIDR`. `curl
+  http://192.168.1.1` against a `--wl-add 192.168.1.1`-allowed host
+  goes out as `CONNECT 192.168.1.1:80` through the proxy and is
+  permitted. No change needed.
+- **ICMP / raw sockets to any host** are denied by the base Seatbelt
+  rule and cannot be selectively re-allowed per remote IP. `ping <ip>`
+  fails on macOS even when the IP is in the whitelist. There is no
+  Seatbelt-only fix.
+- **Non-proxied UDP** (anything not routed via SOCKS5 UDP-ASSOCIATE,
+  which most CLI tooling doesn't use) is in the same boat as ICMP:
+  blocked at the deny-default with no per-IP carve-out.
+
+The implementable alternatives were considered and rejected here for
+the same reasons ADR-0003 rejected them originally:
+
+- **PF firewall split.** Would give full L3 parity but requires a
+  dedicated agent UID (PF scopes by socket-owning UID), sudoers
+  changes, TCC prompts that don't inherit, root-privileged anchor
+  lifecycle. The userspace proxy was chosen specifically to avoid this
+  cost.
+- **Universal ICMP allow** (`(remote ip "*:0")` if it loads). Would
+  widen the threat model — ICMP-tunnel exfiltration to any host
+  becomes possible, however low bandwidth — for limited
+  developer-ergonomic benefit. Punted unless a specific workflow
+  surfaces the need.
+
+Templates that need `ping` for a known IP should document the macOS
+gap as a known divergence from Linux semantics, not paper over it with
+a profile-layer hack that doesn't actually work. The user-facing
+contract is: `--wl-add <ip>` permits *TCP* to that IP on macOS, same as
+on Linux for TCP, but ICMP/raw-socket access matches Linux only when
+the user picks a PF-based deployment (out of scope for this ADR).
