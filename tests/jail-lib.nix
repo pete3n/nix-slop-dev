@@ -125,9 +125,15 @@ let
       expr = let slice = ro-bind "/nix/store/abc/foo" "/nix/store/abc/foo"; in {
         inherit (slice) sbpl preflight;
       };
+      # Issue 15: ro-bind pairs file-read* with process-exec on the same
+      # canonical subpath, matching Linux bwrap's bind-mount semantics
+      # (binding a dir into the jail makes its contents readable AND
+      # exec'able). Without this, a ro-bound binary would dyld-load fine
+      # but fail at the kernel exec call.
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/foo"))
+          (allow process-exec (subpath "/nix/store/abc/foo"))
         '';
         preflight = [];
       };
@@ -144,6 +150,7 @@ let
       expr = (ro-bind "/tmp/spike/foo" "/tmp/spike/foo").sbpl;
       expected = ''
         (allow file-read* (subpath "/private/tmp/spike/foo"))
+        (allow process-exec (subpath "/private/tmp/spike/foo"))
       '';
     };
 
@@ -154,6 +161,7 @@ let
       expr = (ro-bind "/var/log/x" "/var/log/x").sbpl;
       expected = ''
         (allow file-read* (subpath "/private/var/log/x"))
+        (allow process-exec (subpath "/private/var/log/x"))
       '';
     };
 
@@ -161,6 +169,7 @@ let
       expr = (ro-bind "/etc/ssh/sshd_config" "/etc/ssh/sshd_config").sbpl;
       expected = ''
         (allow file-read* (subpath "/private/etc/ssh/sshd_config"))
+        (allow process-exec (subpath "/private/etc/ssh/sshd_config"))
       '';
     };
 
@@ -177,9 +186,11 @@ let
       expected = {
         homeTmp = ''
           (allow file-read* (subpath "/Users/x/tmp/foo"))
+          (allow process-exec (subpath "/Users/x/tmp/foo"))
         '';
         alreadyCanonical = ''
           (allow file-read* (subpath "/private/var/x"))
+          (allow process-exec (subpath "/private/var/x"))
         '';
       };
     };
@@ -199,9 +210,11 @@ let
       expected = {
         quote = ''
           (allow file-read* (subpath "/Users/x/has\"quote"))
+          (allow process-exec (subpath "/Users/x/has\"quote"))
         '';
         backslash = ''
           (allow file-read* (subpath "/Users/x/has\\back"))
+          (allow process-exec (subpath "/Users/x/has\\back"))
         '';
       };
     };
@@ -224,6 +237,7 @@ let
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/env"))
+          (allow process-exec (subpath "/nix/store/abc/env"))
         '';
         preflight = [
           ''mkdir -p "/usr/local/bin" && ln -sfn "/nix/store/abc/env" "/usr/local/bin/env"''
@@ -240,10 +254,15 @@ let
       expr = let slice = rw-bind "/Users/x/work" "/Users/x/work"; in {
         inherit (slice) sbpl preflight;
       };
+      # Issue 15: rw-bind tacks process-exec onto the read+write pair on
+      # the same canonical subpath. Matches Linux bwrap's bind-mount
+      # semantics — a writable bind is also exec'able (the typical case
+      # is a build directory where the agent compiles + runs binaries).
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/Users/x/work"))
           (allow file-write* (subpath "/Users/x/work"))
+          (allow process-exec (subpath "/Users/x/work"))
         '';
         preflight = [];
       };
@@ -264,6 +283,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/share"))
           (allow file-write* (subpath "/nix/store/abc/share"))
+          (allow process-exec (subpath "/nix/store/abc/share"))
         '';
         preflight = [
           ''mkdir -p "/Users/x" && ln -sfn "/nix/store/abc/share" "/Users/x/share"''
@@ -283,9 +303,16 @@ let
     # emission and the read/write pair.
     testMountCwdEmitsCwdPlaceholderReadAndWrite = {
       expr = mount-cwd.sbpl;
+      # Issue 15: mount-cwd's process-exec lands on the same __JAIL_CWD__
+      # placeholder. Real-world payoff: an agent running `./build.sh` or
+      # `npm test` (which forks into ./node_modules/.bin scripts) at the
+      # wrapper's cwd. The darwin wrapper sed-substitutes the placeholder
+      # in BOTH the file-read*/file-write* and process-exec rules at the
+      # same time, so they all land on the resolved cwd path.
       expected = ''
         (allow file-read* (subpath "__JAIL_CWD__"))
         (allow file-write* (subpath "__JAIL_CWD__"))
+        (allow process-exec (subpath "__JAIL_CWD__"))
       '';
     };
 
@@ -333,6 +360,7 @@ let
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.cache"))
+          (allow process-exec (subpath "__JAIL_HOME__/.cache"))
         '';
         preflight = [];
       };
@@ -353,6 +381,7 @@ let
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/cfg"))
+          (allow process-exec (subpath "/nix/store/abc/cfg"))
         '';
         preflight = [
           ''mkdir -p "$HOME/.config" && ln -sfn "/nix/store/abc/cfg" "$HOME/.config/foo"''
@@ -376,6 +405,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.shared/creds"))
           (allow file-write* (subpath "__JAIL_HOME__/.shared/creds"))
+          (allow process-exec (subpath "__JAIL_HOME__/.shared/creds"))
         '';
         preflight = [
           ''mkdir -p "$HOME/.jail" && ln -sfn "$HOME/.shared/creds" "$HOME/.jail/creds"''
@@ -393,6 +423,7 @@ let
       expr = (ro-bind "~/dont-expand" "~/dont-expand").sbpl;
       expected = ''
         (allow file-read* (subpath "~/dont-expand"))
+        (allow process-exec (subpath "~/dont-expand"))
       '';
     };
 
@@ -413,10 +444,17 @@ let
       expr = let slice = tmpfs "/Users/x/scratch"; in {
         inherit (slice) sbpl preflight cleanup;
       };
+      # Issue 15: tmpfs adds process-exec on the same canonical subpath
+      # as its read/write pair. The ephemeral directory holds whatever
+      # the agent or its tools materialise — including binaries built or
+      # downloaded mid-session — and Linux bwrap's tmpfs mount is exec'able
+      # by default; matching that behaviour here keeps the cross-platform
+      # contract honest.
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/Users/x/scratch"))
           (allow file-write* (subpath "/Users/x/scratch"))
+          (allow process-exec (subpath "/Users/x/scratch"))
         '';
         preflight = [ ''mkdir -p "/Users/x/scratch"'' ];
         cleanup = [ ''rm -rf "/Users/x/scratch"'' ];
@@ -438,6 +476,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.config/claude-code-jailed"))
           (allow file-write* (subpath "__JAIL_HOME__/.config/claude-code-jailed"))
+          (allow process-exec (subpath "__JAIL_HOME__/.config/claude-code-jailed"))
         '';
         preflight = [ ''mkdir -p "$HOME/.config/claude-code-jailed"'' ];
         cleanup = [ ''rm -rf "$HOME/.config/claude-code-jailed"'' ];
@@ -482,11 +521,19 @@ let
       in {
         inherit (slice) sbpl preflight cleanup;
       };
+      # Issue 15: write-text pairs its file-read* (literal storePath)
+      # allow with a process-exec (literal storePath) allow on the same
+      # store path. Used for in-jail executable scripts (e.g. wrapper
+      # shims) materialised at Nix-eval time — without the exec allow
+      # the kernel rejects exec'ing the resolved store target. literal,
+      # not subpath, because spike 10 F4: literal is exact-file (matches
+      # the single-file write-text contract, narrower than subpath).
       expected = let
         storePath = builtins.toFile "jail-write-text" ''{"key":"value"}'';
       in {
         sbpl = ''
           (allow file-read* (literal "${storePath}"))
+          (allow process-exec (literal "${storePath}"))
         '';
         preflight = [ ''mkdir -p "/Users/x" && ln -sfn "${storePath}" "/Users/x/cfg.json"'' ];
         cleanup = [ ''rm -f "/Users/x/cfg.json"'' ];
@@ -513,6 +560,7 @@ let
       in {
         sbpl = ''
           (allow file-read* (literal "${storePath}"))
+          (allow process-exec (literal "${storePath}"))
         '';
         preflight = [
           ''mkdir -p "$HOME/.config/claude-code-jailed" && ln -sfn "${storePath}" "$HOME/.config/claude-code-jailed/settings.json"''
@@ -548,10 +596,15 @@ let
       expr = let slice = try-readwrite "/Users/x/cache"; in {
         inherit (slice) sbpl preflight cleanup;
       };
+      # Issue 15: try-readwrite mirrors rw-bind's process-exec pairing.
+      # The unconditional allow (rule applies if path exists, no-ops
+      # otherwise) shape is unchanged — the new process-exec line is
+      # equally harmless when the host path is absent.
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/Users/x/cache"))
           (allow file-write* (subpath "/Users/x/cache"))
+          (allow process-exec (subpath "/Users/x/cache"))
         '';
         preflight = [];
         cleanup = [];
@@ -569,6 +622,7 @@ let
       expected = ''
         (allow file-read* (subpath "__JAIL_HOME__/.cache"))
         (allow file-write* (subpath "__JAIL_HOME__/.cache"))
+        (allow process-exec (subpath "__JAIL_HOME__/.cache"))
       '';
     };
 
@@ -623,6 +677,10 @@ let
       in {
         inherit (slice) sbpl binPaths preflight cleanup;
       };
+      # Issue 15: every closure member gets a paired file-read* + process-exec
+      # allow. The exec allow is on the same canonical subpath as the read,
+      # mirroring Linux bwrap's bind-mount semantics (where binding the
+      # closure dir makes its binaries both readable AND exec'able).
       expected = let
         fakePkg = pkgs.runCommand "jail-test-leaf-pkg" { } ''
           mkdir -p $out/bin
@@ -631,6 +689,7 @@ let
       in {
         sbpl = ''
           (allow file-read* (subpath "${fakePkg}"))
+          (allow process-exec (subpath "${fakePkg}"))
         '';
         binPaths = [ "${fakePkg}/bin" ];
         preflight = [];
@@ -901,6 +960,126 @@ let
           placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_BAR__";
           path = "/etc/foo-bar";
         } ];
+      };
+    };
+
+    # Issue 15 tracer: the prelude must NOT carry the blanket
+    # `(allow process*)` rule. That rule covers process-exec without a
+    # path predicate, which on a non-deny-default macOS userland lets the
+    # jail exec any /usr/bin binary that links libSystem (python3,
+    # osascript, nscurl, defaults, launchctl, etc.) — far wider than the
+    # Linux bwrap implementation, where /usr/bin/curl literally doesn't
+    # exist inside the jail unless explicitly bound. The new prelude
+    # replaces the blanket allow with the narrow non-exec subset plus a
+    # single exec-allow on /usr/bin/env (the wrapper's first exec call
+    # via `sandbox-exec -f profile /usr/bin/env -i …` — without this, no
+    # jail launches at all). Per-combinator process-exec allows pick up
+    # from there.
+    testPreludeDropsBlanketProcessAllow = {
+      expr = lib.hasInfix "(allow process*)" prelude;
+      expected = false;
+    };
+
+    # Issue 15: the narrowed prelude carries process-fork (so any
+    # sub-process plumbing works), process-info* (so /proc-style
+    # introspection within the jail works), and a single exec-allow on
+    # /usr/bin/env (the wrapper's entry point). Pinned via hasInfix so a
+    # silent removal of any one of these surfaces as a test failure but
+    # additions stay reviewable.
+    testPreludeCarriesNarrowProcessAllows = {
+      expr = {
+        processFork = lib.hasInfix "(allow process-fork)" prelude;
+        processInfo = lib.hasInfix "(allow process-info*)" prelude;
+        execEnv = lib.hasInfix ''(allow process-exec (literal "/usr/bin/env"))'' prelude;
+      };
+      expected = {
+        processFork = true;
+        processInfo = true;
+        execEnv = true;
+      };
+    };
+
+    # Issue 15 anti-test: the prelude carries no other process-exec
+    # allows beyond the /usr/bin/env entry point. Combinators that
+    # expose paths (ro-bind, rw-bind, tmpfs, write-text, mount-cwd,
+    # add-pkg-deps, try-readwrite) emit their own process-exec rules
+    # alongside their file-read* rules — the prelude must not pre-allow
+    # any host-binary exec the way the old `(allow process*)` did.
+    testPreludeCarriesNoOtherProcessExecAllows = {
+      expr = let
+        execAllowCount = lib.length (lib.filter
+          (line: lib.hasInfix "process-exec" line)
+          (lib.splitString "\n" prelude));
+      in execAllowCount;
+      expected = 1;
+    };
+
+    # Issue 15 end-to-end: a fully-composed jail emits exactly one
+    # process-exec rule for /usr/bin/env (from the prelude) and one per
+    # closure subpath (from the implicit + explicit add-pkg-deps). No
+    # process-exec rule should land on /usr/bin/curl, /usr/bin/python3,
+    # /usr/sbin/sshd, or any other host-binary path the old `(allow
+    # process*)` would have silently covered. This pins the security
+    # property end-to-end across the constructor's fold + prelude
+    # composition, catching any future regression that re-introduces a
+    # blanket exec allow somewhere in the assembly pipeline.
+    testJailEndToEndProcessExecOnlyEnvAndClosures = {
+      expr = let
+        leafPkg = pkgs.runCommand "jail-test-end-to-end-pkg" { } ''
+          mkdir -p $out/bin; : > $out/bin/jail-test-end-to-end
+        '';
+        result = jail "jail-test-end-to-end" leafPkg [
+          time-zone
+          network
+          mount-cwd
+          (set-env "FOO" "bar")
+        ];
+        sbpl = result.jailData.sbpl;
+      in {
+        envExecPresent = lib.hasInfix
+          ''(allow process-exec (literal "/usr/bin/env"))'' sbpl;
+        cwdExecPresent = lib.hasInfix
+          ''(allow process-exec (subpath "__JAIL_CWD__"))'' sbpl;
+        curlExecAbsent = !(lib.hasInfix "/usr/bin/curl" sbpl);
+        python3ExecAbsent = !(lib.hasInfix "/usr/bin/python3" sbpl);
+        sshdExecAbsent = !(lib.hasInfix "/usr/sbin/sshd" sbpl);
+        blanketProcessAllowAbsent = !(lib.hasInfix "(allow process*)" sbpl);
+      };
+      expected = {
+        envExecPresent = true;
+        cwdExecPresent = true;
+        curlExecAbsent = true;
+        python3ExecAbsent = true;
+        sshdExecAbsent = true;
+        blanketProcessAllowAbsent = true;
+      };
+    };
+
+    # Issue 15 end-to-end: non-exec-emitting combinators (time-zone,
+    # network, host-resolve, set-env, try-fwd-env, no-new-session,
+    # noescape) contribute no process-exec rules. Pins the negative side
+    # of the per-combinator contract from the issue's "Combinators that
+    # do NOT emit process-exec" section. host-resolve is the trickiest
+    # one: its read-only design rules out exec by intent (use case is
+    # /etc/bashrc-style config files, not binaries). A future change
+    # that "helpfully" pairs every file-read* with process-exec would
+    # silently widen the exec surface; this test catches that.
+    testNonExecCombinatorsEmitNoProcessExec = {
+      expr = {
+        timeZone = lib.hasInfix "process-exec" time-zone.sbpl;
+        network = lib.hasInfix "process-exec" network.sbpl;
+        setEnv = lib.hasInfix "process-exec" (set-env "K" "v").sbpl;
+        tryFwdEnv = lib.hasInfix "process-exec" (try-fwd-env "FOO").sbpl;
+        noNewSession = lib.hasInfix "process-exec" no-new-session.sbpl;
+        hostResolve = lib.hasInfix "process-exec" (host-resolve "/etc/bashrc").sbpl;
+      };
+      expected = {
+        timeZone = false;
+        network = false;
+        setEnv = false;
+        tryFwdEnv = false;
+        noNewSession = false;
+        hostResolve = false;
       };
     };
 

@@ -91,3 +91,54 @@ combinators wrap caller-supplied paths in it implicitly. Spike 10 F1.
   for cat-and-relatives to canonicalize paths through the root — this
   allows reading `/` itself (not its children, since `literal` is exact).
   Spike 10 F4.
+
+## Addendum (issue 15): exec narrowing
+
+The original prelude carried `(allow process*)` lifted byte-for-byte
+from spike 10 probe `01h-narrow-allow-only`. `process*` covers
+`process-exec`, `process-fork`, and `process-info*` without a path
+predicate. Combined with the prelude's dyld load paths (`/usr/lib`,
+`/System/Library`), it let the jailed process exec any binary under
+`/usr/bin`, `/bin`, `/sbin`, `/usr/sbin`, `/usr/libexec` that links
+libSystem — effectively the entire macOS userland (`python3`,
+`osascript`, `nscurl`, `defaults`, `launchctl`, etc.). The ADR's
+threat-model paragraph argued *read* confinement; exec confinement was
+never explicitly considered.
+
+Linux bwrap does not have this gap. A fresh mount namespace means
+`/usr/bin/curl` literally does not exist inside the jail unless
+explicitly bound, and the Linux claude-code template binds only
+`/usr/bin/env` (one file). Per the project's priority ordering
+(security > complexity > CLI parity), the implicit exec surface was
+the larger door the original read-confinement narrative was trying to
+close.
+
+The prelude is now:
+
+```sbpl
+(allow process-fork)
+(allow process-info*)
+(allow process-exec (literal "/usr/bin/env"))
+```
+
+`/usr/bin/env` is allowed because the wrapper's invocation
+`sandbox-exec -f profile /usr/bin/env -i …` makes it the first exec
+call inside the jail — without it no jail launches at all. Every other
+exec authority is opted into per-path: each bind-style combinator
+(`ro-bind`, `rw-bind`, `try-readwrite`, `tmpfs`, `mount-cwd`,
+`write-text`, `add-pkg-deps`) emits `(allow process-exec …)` on the
+same canonical path as its `file-read*` allow, matching bwrap's
+bind-mount semantics where a bound dir is both readable AND exec'able.
+
+Combinators that expose no filesystem (`set-env`, `try-fwd-env`,
+`time-zone`, `network`, `no-new-session`) and the read-only
+`host-resolve` (used for config files like `/etc/bashrc`, not
+binaries) emit no `process-exec`. A template that genuinely needs to
+exec a host-resolved path can compose a separate combinator.
+
+The acceptance test for this change is the end-to-end jail assertion
+in `tests/jail-lib.nix`: a default-composed jail's rendered SBPL
+contains `process-exec` for `/usr/bin/env` plus the closure paths, and
+explicitly NOT for `/usr/bin/curl`, `/usr/bin/python3`, `/usr/sbin/sshd`,
+or any other host-binary path the old `(allow process*)` would have
+silently covered.

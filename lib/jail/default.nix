@@ -149,14 +149,26 @@ let
 
   # The ADR-0004 curated prelude: the minimum SBPL allows that make a
   # `(deny default)` jail usable for any process at all. Discovered in
-  # spike 10 probe 01h. Allows process plumbing (process*, sysctl-read,
-  # mach-lookup, ipc-posix-shm*, signal), root metadata reads (so the
-  # kernel can resolve any path), and the load-time read paths libsystem
-  # / dyld need (/usr/lib, /System/Library, /usr/share/icu, dyld cache,
-  # timezone). The prelude grows organically as new agents added to the
-  # templates surface dyld or Mach-service failures during HITL smoke.
-  # Exposed so templates can introspect (and so the slice 9 test can
-  # pin the baseline byte-for-byte).
+  # spike 10 probe 01h. Allows process plumbing (process-fork,
+  # process-info*, sysctl-read, mach-lookup, ipc-posix-shm*, signal),
+  # root metadata reads (so the kernel can resolve any path), and the
+  # load-time read paths libsystem / dyld need (/usr/lib, /System/Library,
+  # /usr/share/icu, dyld cache, timezone). The prelude grows organically
+  # as new agents added to the templates surface dyld or Mach-service
+  # failures during HITL smoke. Exposed so templates can introspect.
+  #
+  # Issue 15 narrows the historical `(allow process*)` (which silently
+  # covered process-exec without a path predicate, granting the jail
+  # exec authority over the entire macOS userland) to:
+  #   - process-fork: any sub-process plumbing.
+  #   - process-info*: /proc-style introspection within the jail.
+  #   - process-exec (literal "/usr/bin/env"): the wrapper's entry
+  #     point — `sandbox-exec -f profile /usr/bin/env -i …` is the
+  #     first exec call the kernel sees inside the jail. Without it
+  #     no jail launches at all. All other exec authority is opted into
+  #     per-path by each bind-style combinator (matching Linux bwrap,
+  #     where /usr/bin/curl only exists inside the jail if explicitly
+  #     bound).
   #
   # Issue-12 HITL follow-up additions (jail-shell + /usr/bin/curl):
   #   - file-ioctl /dev: bash TIOCSPGRP for interactive job control.
@@ -174,7 +186,9 @@ let
   #   - /private/etc/ssl: /usr/bin/curl ships against system LibreSSL
   #     which reads openssl.cnf + cert.pem at startup.
   prelude = ''
-    (allow process*)
+    (allow process-fork)
+    (allow process-info*)
+    (allow process-exec (literal "/usr/bin/env"))
     (allow sysctl-read)
     (allow mach-lookup)
     (allow ipc-posix-shm*)
@@ -263,9 +277,11 @@ let
     # resolves any symlink at `dst` before applying the rule, so the
     # allow lands on the resolved path (spike 10 F1).
     ro-bind = src: dst:
-      emptySlice // {
+      let rendered = renderSbplPath src;
+      in emptySlice // {
         sbpl = ''
-          (allow file-read* (subpath "${renderSbplPath src}"))
+          (allow file-read* (subpath "${rendered}"))
+          (allow process-exec (subpath "${rendered}"))
         '';
         preflight = bindPreflight src dst;
       };
@@ -282,6 +298,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "${rendered}"))
           (allow file-write* (subpath "${rendered}"))
+          (allow process-exec (subpath "${rendered}"))
         '';
         preflight = bindPreflight src dst;
       };
@@ -303,6 +320,7 @@ let
       sbpl = ''
         (allow file-read* (subpath "__JAIL_CWD__"))
         (allow file-write* (subpath "__JAIL_CWD__"))
+        (allow process-exec (subpath "__JAIL_CWD__"))
       '';
     };
 
@@ -345,6 +363,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "${sbplPath}"))
           (allow file-write* (subpath "${sbplPath}"))
+          (allow process-exec (subpath "${sbplPath}"))
         '';
         preflight = [ ''mkdir -p "${shellPath}"'' ];
         cleanup = [ ''rm -rf "${shellPath}"'' ];
@@ -375,6 +394,7 @@ let
       in emptySlice // {
         sbpl = ''
           (allow file-read* (literal "${storePath}"))
+          (allow process-exec (literal "${storePath}"))
         '';
         preflight = [
           ''mkdir -p "${dirOf shellPath}" && ln -sfn "${storePath}" "${shellPath}"''
@@ -394,6 +414,7 @@ let
         sbpl = ''
           (allow file-read* (subpath "${rendered}"))
           (allow file-write* (subpath "${rendered}"))
+          (allow process-exec (subpath "${rendered}"))
         '';
       };
 
@@ -475,8 +496,15 @@ let
         closureInfo = pkgs.closureInfo { rootPaths = pkgList; };
         rawPaths = builtins.readFile "${closureInfo}/store-paths";
         closurePaths = lib.filter (s: s != "") (lib.splitString "\n" rawPaths);
+        # Issue 15: pair every file-read* allow with a process-exec allow on
+        # the same canonical subpath. The closure includes mainBin's libdyld
+        # deps + any user-supplied pkgs (e.g. pkgs.curl). Pairing both
+        # opcodes per path mirrors Linux bwrap's bind-mount semantics — a
+        # bound dir is both readable AND exec'able — instead of leaning on
+        # a blanket `(allow process*)` in the prelude.
         sbplLines = lib.concatMapStringsSep "" (path: ''
           (allow file-read* (subpath "${path}"))
+          (allow process-exec (subpath "${path}"))
         '') closurePaths;
       in emptySlice // {
         sbpl = sbplLines;
