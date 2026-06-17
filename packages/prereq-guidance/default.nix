@@ -7,12 +7,41 @@
 # Returns 0 when all system prerequisites are met, nonzero otherwise. The
 # NixOS marker is overridable by argument for testing; production calls pass
 # nothing and detect /etc/NIXOS.
+#
+# On non-NixOS we always offer the canonical one-shot
+#   `nix run github:pete3n/nix-slop-dev#setup-linux -- --apply`
+# and, when /etc/os-release identifies a supported distro, the equivalent
+# manual install command for users who prefer to do it by hand. The supported
+# set matches apply-lib.sh's auditd_install_cmd (ubuntu/debian/fedora) so the
+# script never advertises a manual path apply mode itself can't take.
 pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
   ''
     set -u
 
     nixos_marker="''${1:-/etc/NIXOS}"
+    setup_linux_cmd='nix run github:pete3n/nix-slop-dev#setup-linux -- --apply'
     prereq_ok=1
+
+    # Distro ID drives the manual-install hint. Unknown / unsupported distros
+    # only see the nix-run one-shot (apply mode would reject them too).
+    distro_id=""
+    if [ -r /etc/os-release ]; then
+    	# shellcheck disable=SC1091
+    	. /etc/os-release 2>/dev/null || true
+    	distro_id="''${ID:-}"
+    fi
+
+    case "$distro_id" in
+    	ubuntu | debian)
+    		manual_auditd='sudo apt-get install -y auditd && sudo systemctl enable --now auditd'
+    		;;
+    	fedora)
+    		manual_auditd='sudo dnf install -y audit && sudo systemctl enable --now auditd'
+    		;;
+    	*)
+    		manual_auditd=""
+    		;;
+    esac
 
     if [ -f "$nixos_marker" ]; then
     	# On NixOS the wrapper invokes systemd-run by its embedded store path,
@@ -30,7 +59,13 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     		printf '    security.sandboxed.enable = true;\n'
     		printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
     	else
-    		printf '  Run `setup-linux --apply` to install and enable auditd.\n\n'
+    		printf '  Run all setup steps with confirmation:\n'
+    		printf '    %s\n' "$setup_linux_cmd"
+    		if [ -n "$manual_auditd" ]; then
+    			printf '  Or install and enable auditd by hand:\n'
+    			printf '    %s\n' "$manual_auditd"
+    		fi
+    		printf '\n'
     	fi
     	prereq_ok=0
     fi
@@ -43,7 +78,10 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     		printf '  Add to your NixOS config:\n'
     		printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
     	else
-    		printf '  Run `setup-linux --apply` to write /etc/sudoers.d/sandboxed.\n\n'
+    		printf '  Run (apply mode writes a visudo-validated drop-in at\n'
+    		printf '  /etc/sudoers.d/sandboxed after showing the changes):\n'
+    		printf '    %s\n' "$setup_linux_cmd"
+    		printf '  Or see docs/non-nixos-linux.md for the manual sudoers steps.\n\n'
     	fi
     	prereq_ok=0
     fi

@@ -40,7 +40,7 @@ check_auditd() {
 		printf '✓ auditd installed and active\n'
 		return 0
 	fi
-	printf '✗ auditd not active (%s) — install and enable it: apt/dnf install auditd && systemctl enable --now auditd\n' "$auditd_state"
+	printf '✗ auditd not active (%s) — run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n' "$auditd_state"
 	return 1
 }
 
@@ -53,7 +53,7 @@ check_sudoers() {
 		printf '✓ sudoers drop-in present (%s)\n' "$sudoers_file"
 		return 0
 	fi
-	printf '✗ sudoers drop-in missing (%s) — run: setup-linux --apply\n' "$sudoers_file"
+	printf '✗ sudoers drop-in missing (%s) — run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n' "$sudoers_file"
 	return 1
 }
 

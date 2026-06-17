@@ -170,7 +170,7 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		fi
     	fi
 
-    	printf 'setup-linux: done. Run `setup-linux --check` to verify.\n'
+    	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'
     	exit 0
     }
 
