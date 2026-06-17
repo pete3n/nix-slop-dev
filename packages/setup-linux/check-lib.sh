@@ -58,16 +58,28 @@ check_sudoers() {
 }
 
 # Ubuntu 24.04+ blocks unprivileged user namespaces (which bubblewrap needs to
-# build the Jail) when kernel.apparmor_restrict_unprivileged_userns=1. The fact
-# is the sysctl value, or "" when the knob is absent; only the value 1 fails.
+# build the Jail) when kernel.apparmor_restrict_unprivileged_userns=1. The
+# system-wide knob can be lifted two ways:
+#   - sysctl set to 0 (broad, not recommended — see docs/non-nixos-linux.md §4)
+#   - the nix-slop-dev-bwrap AppArmor profile loaded, which grants userns to
+#     bwrap only (apply mode installs this)
+# The two facts together: userns_sysctl is the raw /proc value (or "" when the
+# knob is absent), apparmor_profile_loaded is "1" if the nix-slop-dev-bwrap
+# profile is in the loaded-profile list and "0" otherwise.
 check_userns_restriction() {
 	userns_sysctl="$1"
-	if [ "$userns_sysctl" = "1" ]; then
-		printf '✗ unprivileged user namespaces restricted (kernel.apparmor_restrict_unprivileged_userns=1) — bubblewrap Jail will fail; run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply (apply mode installs a narrow AppArmor profile granting userns to bwrap only — see docs/non-nixos-linux.md §4 for manual steps)\n'
-		return 1
+	apparmor_profile_loaded="$2"
+
+	if [ "$userns_sysctl" != "1" ]; then
+		printf '✓ unprivileged user namespaces permitted (sysctl)\n'
+		return 0
 	fi
-	printf '✓ unprivileged user namespaces permitted\n'
-	return 0
+	if [ "$apparmor_profile_loaded" = "1" ]; then
+		printf '✓ AppArmor profile nix-slop-dev-bwrap loaded — grants userns to bwrap (sysctl still restricted system-wide, which is intended)\n'
+		return 0
+	fi
+	printf '✗ unprivileged user namespaces restricted (kernel.apparmor_restrict_unprivileged_userns=1) and nix-slop-dev-bwrap AppArmor profile not loaded — bubblewrap Jail will fail; run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply (apply mode installs a narrow AppArmor profile granting userns to bwrap only — see docs/non-nixos-linux.md §4 for manual steps)\n'
+	return 1
 }
 
 # Run every prerequisite check against already-collected host facts, printing
@@ -80,13 +92,14 @@ run_checks() {
 	auditd_state="$3"
 	sudoers_file="$4"
 	userns_sysctl="$5"
+	apparmor_profile_loaded="$6"
 
 	checks_failed=0
 	check_systemd_version "$systemd_version" || checks_failed=1
 	check_cgroup_v2 "$controllers_file" || checks_failed=1
 	check_auditd "$auditd_state" || checks_failed=1
 	check_sudoers "$sudoers_file" || checks_failed=1
-	check_userns_restriction "$userns_sysctl" || checks_failed=1
+	check_userns_restriction "$userns_sysctl" "$apparmor_profile_loaded" || checks_failed=1
 
 	return "$checks_failed"
 }

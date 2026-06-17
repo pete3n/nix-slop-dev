@@ -58,32 +58,41 @@ pkgs.runCommand "setup-linux-checks-tests" { } ''
   case "$report" in "✗"*) ;; *) fail "sudoers absent: expected ✗, got: $report" ;; esac
 
   # Ubuntu 24.04+ restricts unprivileged user namespaces (which bubblewrap
-  # needs for the Jail) via a sysctl. Fact is the sysctl value, or "" when the
-  # knob is absent. Only the value 1 (restricted) is a failure.
-  report=$(check_userns_restriction "") && status=0 || status=$?
+  # needs for the Jail) via a sysctl. Two facts: the sysctl value (or "" when
+  # the knob is absent), and whether our nix-slop-dev-bwrap AppArmor profile
+  # is loaded. The check passes when either the sysctl is not 1 (permitted
+  # system-wide) or the profile is loaded (bwrap exempted via AppArmor).
+  report=$(check_userns_restriction "" 0) && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "userns absent sysctl should pass (rc=$status)"
   case "$report" in "✓"*) ;; *) fail "userns absent: expected ✓, got: $report" ;; esac
 
-  report=$(check_userns_restriction 0) && status=0 || status=$?
+  report=$(check_userns_restriction 0 0) && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "userns 0 should pass (rc=$status)"
   case "$report" in "✓"*) ;; *) fail "userns 0: expected ✓, got: $report" ;; esac
 
-  report=$(check_userns_restriction 1) && status=0 || status=$?
-  [ "$status" -eq 1 ] || fail "userns 1 (restricted) should fail (rc=$status)"
-  case "$report" in "✗"*) ;; *) fail "userns 1: expected ✗, got: $report" ;; esac
+  report=$(check_userns_restriction 1 0) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "userns 1 + no profile should fail (rc=$status)"
+  case "$report" in "✗"*) ;; *) fail "userns 1 + no profile: expected ✗, got: $report" ;; esac
+
+  # The post-apply state: sysctl still 1 (apply mode never flips it), but the
+  # nix-slop-dev-bwrap profile is loaded — bwrap is exempted, so the check
+  # should pass. This is the regression the second-arg added.
+  report=$(check_userns_restriction 1 1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "userns 1 + profile loaded should pass (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "userns 1 + profile: expected ✓, got: $report" ;; esac
 
   # Aggregation: run_checks reports every prerequisite and exits zero only when
   # all pass. Args: systemd_version controllers_file auditd_state sudoers_file
-  # userns_sysctl.
+  # userns_sysctl apparmor_profile_loaded.
   touch agg-controllers agg-sudoers
-  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 > allpass.txt \
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 > allpass.txt \
     && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "all prerequisites met should exit 0 (rc=$status)"
   [ "$(grep -c '✓' allpass.txt)" -eq 5 ] || fail "all-pass: expected 5 ✓ lines, got:
 $(cat allpass.txt)"
   case "$(cat allpass.txt)" in *✗*) fail "all-pass output must contain no ✗" ;; esac
 
-  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 > onefail.txt \
+  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 > onefail.txt \
     && status=0 || status=$?
   [ "$status" -ne 0 ] || fail "a failing prerequisite should exit nonzero"
 

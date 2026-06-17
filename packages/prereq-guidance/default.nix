@@ -24,6 +24,8 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
 
     nixos_marker="''${1:-/etc/NIXOS}"
     userns_sysctl_path="''${2:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
+    apparmor_profiles_path="''${3:-/sys/kernel/security/apparmor/profiles}"
+    apparmor_profile_name=nix-slop-dev-bwrap
     setup_linux_cmd='nix run github:pete3n/nix-slop-dev#setup-linux -- --apply'
     prereq_ok=1
 
@@ -93,20 +95,28 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
 
     # Ubuntu 23.10+/24.04 restricts unprivileged user namespaces via an
     # AppArmor sysctl. bubblewrap (the Jail) cannot create a userns when this
-    # is on, so `claude` / `jail-shell` would launch and then fail at exec
-    # time — catch it here, in the shellHook, before that happens. Skipped on
-    # NixOS where the knob isn't typically enabled.
+    # is on UNLESS our nix-slop-dev-bwrap AppArmor profile is loaded — that
+    # profile grants the userns capability to bwrap only (the system-wide
+    # sysctl stays restricted, which is the intended posture). Skipped on
+    # NixOS where the sysctl isn't a typical concern.
     if [ ! -f "$nixos_marker" ] && [ -r "$userns_sysctl_path" ]; then
     	userns_val=""
     	read -r userns_val < "$userns_sysctl_path" 2>/dev/null || true
     	if [ "$userns_val" = "1" ]; then
-    		printf '\033[1;33m⚠ Unprivileged user namespaces are restricted (Ubuntu 23.10+/24.04 default).\033[0m\n'
-    		printf '  bubblewrap (the Jail) needs to create a user namespace; it will fail until\n'
-    		printf '  an AppArmor profile grants the userns capability to bwrap.\n'
-    		printf '  Run (apply mode installs a narrow profile granting userns to bwrap only):\n'
-    		printf '    %s\n' "$setup_linux_cmd"
-    		printf '  Or see docs/non-nixos-linux.md §4 for the manual profile steps.\n\n'
-    		prereq_ok=0
+    		profile_loaded=0
+    		if [ -r "$apparmor_profiles_path" ] \
+    			&& grep -q "^''${apparmor_profile_name} " "$apparmor_profiles_path" 2>/dev/null; then
+    			profile_loaded=1
+    		fi
+    		if [ "$profile_loaded" != 1 ]; then
+    			printf '\033[1;33m⚠ Unprivileged user namespaces are restricted (Ubuntu 23.10+/24.04 default) and the nix-slop-dev-bwrap AppArmor profile is not loaded.\033[0m\n'
+    			printf '  bubblewrap (the Jail) needs to create a user namespace; it will fail until\n'
+    			printf '  the AppArmor profile grants the userns capability to bwrap.\n'
+    			printf '  Run (apply mode installs a narrow profile granting userns to bwrap only):\n'
+    			printf '    %s\n' "$setup_linux_cmd"
+    			printf '  Or see docs/non-nixos-linux.md §4 for the manual profile steps.\n\n'
+    			prereq_ok=0
+    		fi
     	fi
     fi
 

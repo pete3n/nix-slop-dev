@@ -18,6 +18,8 @@ pkgs.writeShellScriptBin "setup-linux" # bash
 
     sudoers_file=/etc/sudoers.d/sandboxed
     userns_sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+    apparmor_profiles_path=/sys/kernel/security/apparmor/profiles
+    apparmor_profile_name=nix-slop-dev-bwrap
     cgroup_controllers=/sys/fs/cgroup/cgroup.controllers
 
     _usage() {
@@ -46,6 +48,15 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	auditd_state="$(systemctl is-active auditd 2>/dev/null || true)"
     	# AppArmor unprivileged-userns sysctl value, or "" when the knob is absent.
     	userns_sysctl="$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)"
+    	# nix-slop-dev-bwrap AppArmor profile loaded? Securityfs profile list is
+    	# world-readable on Ubuntu. Match the name at column 0 with a trailing
+    	# space so a future profile prefixed with the same string can't false-
+    	# positive (e.g. nix-slop-dev-bwrap-foo).
+    	apparmor_profile_loaded=0
+    	if ${pkgs.gnugrep}/bin/grep -q "^''${apparmor_profile_name} " \
+    		"$apparmor_profiles_path" 2>/dev/null; then
+    		apparmor_profile_loaded=1
+    	fi
 
     	printf 'setup-linux: Sandbox/Jail prerequisites\n\n'
     	if run_checks \
@@ -53,7 +64,8 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		"$cgroup_controllers" \
     		"$auditd_state" \
     		"$sudoers_file" \
-    		"$userns_sysctl"; then
+    		"$userns_sysctl" \
+    		"$apparmor_profile_loaded"; then
     		printf '\nAll prerequisites met.\n'
     		exit 0
     	else
@@ -70,7 +82,6 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     _run_apply_mode() {
     	apply_user="$(${pkgs.coreutils}/bin/id -un)"
     	distro_id="$(_detect_distro_id)"
-    	apparmor_profile_name=nix-slop-dev-bwrap
     	apparmor_profile_path="/etc/apparmor.d/''${apparmor_profile_name}"
     	bwrap_glob='/nix/store/*/bin/bwrap'
 
@@ -80,12 +91,26 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	else
     		auditd_ok=0
     	fi
-    	# Ubuntu 23.10+/24.04 restricts unprivileged userns when the sysctl is 1.
-    	if [ "$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)" = 1 ]; then
-    		userns_ok=0
-    	else
+    	# Userns is satisfied if the sysctl is unrestricted system-wide OR our
+    	# AppArmor profile is loaded (the latter is what apply mode installs;
+    	# it grants userns to bwrap only without lifting the restriction
+    	# globally). Treating "profile already loaded" as satisfied keeps apply
+    	# mode idempotent — a second run is a no-op, not a reinstall.
+    	userns_sysctl_now="$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)"
+    	apparmor_profile_loaded=0
+    	if ${pkgs.gnugrep}/bin/grep -q "^''${apparmor_profile_name} " \
+    		"$apparmor_profiles_path" 2>/dev/null; then
+    		apparmor_profile_loaded=1
+    	fi
+    	if [ "$userns_sysctl_now" != 1 ] || [ "$apparmor_profile_loaded" = 1 ]; then
     		userns_ok=1
-    		printf 'setup-linux: unprivileged user namespaces permitted; no AppArmor profile needed.\n'
+    		if [ "$apparmor_profile_loaded" = 1 ]; then
+    			printf 'setup-linux: AppArmor profile %s already loaded; no userns work needed.\n' "$apparmor_profile_name"
+    		else
+    			printf 'setup-linux: unprivileged user namespaces permitted; no AppArmor profile needed.\n'
+    		fi
+    	else
+    		userns_ok=0
     	fi
 
     	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok")"
