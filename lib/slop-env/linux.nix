@@ -63,6 +63,16 @@ let
       # is read-only. The launch script's other /nix/store references
       # (bwrap, the jailed binary, combinator data) are untouched and
       # resolve normally after exec.
+      #
+      # The sed pattern is anchored on `/projects/` (with slashes) so it
+      # only touches DESTINATION paths inside the jail
+      # (~/.local/state/claude/projects/<placeholder>/...) and leaves the
+      # SOURCE store paths of write-text artifacts alone — those have
+      # names like `jail-write-text--.local-state-claude-projects-<placeholder>-...`
+      # (dash-separated, no slashes) and were built with the placeholder
+      # baked into the store name. Broad substitution would rename the
+      # source path to one that doesn't exist on disk and bwrap fails
+      # with "Can't find source path".
       placeholderPreamble = jailBinary: ''
         PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(basename "$PWD")}"
         # Sanitise so the basename can't smuggle shell metacharacters or
@@ -73,7 +83,7 @@ let
         SLOP_LAUNCH_DIR=$(${pkgs.coreutils}/bin/mktemp -d -t slop-env.XXXXXX)
         trap '${pkgs.coreutils}/bin/rm -rf "$SLOP_LAUNCH_DIR"' EXIT
         SLOP_LAUNCHER="$SLOP_LAUNCH_DIR/${baseNameOf jailBinary}"
-        ${pkgs.gnused}/bin/sed "s|${projectNamePlaceholder}|$PROJECT_NAME|g" \
+        ${pkgs.gnused}/bin/sed "s|/projects/${projectNamePlaceholder}|/projects/$PROJECT_NAME|g" \
           ${jailBinary} > "$SLOP_LAUNCHER"
         ${pkgs.coreutils}/bin/chmod +x "$SLOP_LAUNCHER"
       '';
