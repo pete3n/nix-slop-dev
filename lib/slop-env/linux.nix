@@ -13,11 +13,19 @@
 let
   lib = pkgs.lib;
 
+  # Sentinel projectName for the zero-touch apps path. When mkBins is
+  # called with no projectName (the default), the jail's cfgDir paths
+  # contain this string and the wrapper-bins sed-substitute it with
+  # basename "$PWD" at invocation. Concrete callers (the claude-code
+  # template) pass projectName explicitly and the wrapper exec's the
+  # jail directly with no substitution.
+  projectNamePlaceholder = "__SLOP_ENV_PROJECT_NAME__";
+
   mkBins =
-    { projectName
-    , rulesDir
-    , skillsDir
-    , claudeMdFile
+    { projectName ? projectNamePlaceholder
+    , rulesDir ? ./defaults/rules
+    , skillsDir ? null
+    , claudeMdFile ? ./defaults/CLAUDE.md
     , basePkgs ? shared.defaultBasePkgs
     , projectPkgs ? [ ]
     , projectEnv ? { }
@@ -39,6 +47,91 @@ let
       # Linux currently has one sandboxed wrapper for both jails (slice 21
       # adds Darwin's per-jail variant).
       sandboxedPackages = [ sandboxed ];
+
+      usesPlaceholder = projectName == projectNamePlaceholder;
+
+      # First-run state dir + credential bootstrap. Idempotent on every
+      # invocation. Matches today's shellHook (slice 18.3).
+      bootstrapBlock = ''
+        CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+      '';
+
+      # Per-invocation projectName resolution + sed-substitution of the
+      # jail's launch script. Materialised in a tempdir because /nix/store
+      # is read-only. The launch script's other /nix/store references
+      # (bwrap, the jailed binary, combinator data) are untouched and
+      # resolve normally after exec.
+      #
+      # The sed pattern is anchored on `/projects/` (with slashes) so it
+      # only touches DESTINATION paths inside the jail
+      # (~/.local/state/claude/projects/<placeholder>/...) and leaves the
+      # SOURCE store paths of write-text artifacts alone — those have
+      # names like `jail-write-text--.local-state-claude-projects-<placeholder>-...`
+      # (dash-separated, no slashes) and were built with the placeholder
+      # baked into the store name. Broad substitution would rename the
+      # source path to one that doesn't exist on disk and bwrap fails
+      # with "Can't find source path".
+      placeholderPreamble = jailBinary: ''
+        PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(basename "$PWD")}"
+        # Sanitise so the basename can't smuggle shell metacharacters or
+        # sed delimiters into the substitution. Keep alnum + . _ -
+        PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/$PROJECT_NAME"
+        ${bootstrapBlock}
+        SLOP_LAUNCH_DIR=$(${pkgs.coreutils}/bin/mktemp -d -t slop-env.XXXXXX)
+        trap '${pkgs.coreutils}/bin/rm -rf "$SLOP_LAUNCH_DIR"' EXIT
+        SLOP_LAUNCHER="$SLOP_LAUNCH_DIR/${baseNameOf jailBinary}"
+        ${pkgs.gnused}/bin/sed "s|/projects/${projectNamePlaceholder}|/projects/$PROJECT_NAME|g" \
+          ${jailBinary} > "$SLOP_LAUNCHER"
+        ${pkgs.coreutils}/bin/chmod +x "$SLOP_LAUNCHER"
+      '';
+
+      # Concrete-projectName preamble: cfgDir is baked at Nix-eval time.
+      # Still bootstrap state dirs so a fresh host doesn't error on
+      # missing credentials.json.
+      concretePreamble = ''
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        ${bootstrapBlock}
+      '';
+
+      # PATH-binary wrappers used by apps.${system}.{claude,jail-shell}
+      # (ADR-0005 zero-touch entry points). The template's mkShell still
+      # uses a shell function + alias inside shellHook (preserving slice
+      # 17's byte-equality) — these are an additive surface for apps and
+      # for whoever wants survival across host-shell exec.
+      claude = pkgs.writeShellScriptBin "claude" (
+        if usesPlaceholder then ''
+          set -euo pipefail
+          ${placeholderPreamble "${jailedClaude}/bin/jailed-claude"}
+          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+            -e CLAUDE_CONFIG_DIR \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+            "$SLOP_LAUNCHER" "$@"
+        '' else ''
+          set -euo pipefail
+          ${concretePreamble}
+          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+            -e CLAUDE_CONFIG_DIR \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+            ${jailedClaude}/bin/jailed-claude "$@"
+        ''
+      );
+
+      jail-shell = pkgs.writeShellScriptBin "jail-shell" (
+        if usesPlaceholder then ''
+          set -euo pipefail
+          ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
+          exec ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+            "$SLOP_LAUNCHER" "$@"
+        '' else ''
+          set -euo pipefail
+          ${concretePreamble}
+          exec ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+            ${jailedShell}/bin/jailed-shell "$@"
+        ''
+      );
 
       shellHook = # sh
         ''
@@ -93,7 +186,7 @@ let
         '';
     in
     {
-      inherit jailedClaude jailedShell sandboxedPackages shellHook;
+      inherit claude jail-shell jailedClaude jailedShell sandboxedPackages shellHook;
     };
 
   mkShell = args:

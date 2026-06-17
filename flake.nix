@@ -78,7 +78,9 @@
                 rulesDir = ../templates/claude-code/slop-env/claude-config/rules;
                 skillsDir = ../templates/claude-code/slop-env/claude-config/skills;
               };
-              expectedKeys = [ "jailedClaude" "jailedShell" "sandboxedPackages" "shellHook" ];
+              # Slice 18 added `claude` and `jail-shell` PATH binaries to
+              # the return shape (consumed by apps.${system}.{claude,jail-shell}).
+              expectedKeys = [ "claude" "jail-shell" "jailedClaude" "jailedShell" "sandboxedPackages" "shellHook" ];
               actualKeys = builtins.attrNames bins;
             in
             if actualKeys == expectedKeys then
@@ -87,6 +89,49 @@
               ''
             else
               throw "lib.slopEnv mkBins shape regressed. expected: ${builtins.concatStringsSep " " expectedKeys} actual: ${builtins.concatStringsSep " " actualKeys}";
+
+          # Slice 18.1 tracer: apps wiring exists. Both apps must have
+          # type = "app" and a non-null program string.
+          apps-shape =
+            let
+              claudeApp = self.apps.${system}.claude or null;
+              jailShellApp = self.apps.${system}.jail-shell or null;
+              ok = app: app != null && (app.type or null) == "app" && (app.program or null) != null;
+            in
+            if ok claudeApp && ok jailShellApp then
+              pkgs.runCommand "apps-shape" { } ''
+                echo "apps.${system}.{claude,jail-shell} wired" > $out
+              ''
+            else
+              throw "apps.${system}.{claude,jail-shell} missing or wrong shape";
+
+          # Slice 18.2: zero-touch apps build the jail with a
+          # __SLOP_ENV_PROJECT_NAME__ sentinel in cfgDir paths. The
+          # wrapper sed-substitutes basename "$PWD" at invocation. This
+          # check verifies the sentinel is actually present in the
+          # rendered jail launch script when mkBins is called with no
+          # args (apps path). The template calls mkBins with a concrete
+          # projectName, so its launch script must NOT contain the
+          # sentinel (covered by byte-equality in slice 17's check).
+          apps-jail-has-placeholder =
+            let
+              bins = (self.lib.slopEnv pkgs).mkBins { };
+            in
+            pkgs.runCommand "apps-jail-has-placeholder" { } ''
+              if ! grep -q "__SLOP_ENV_PROJECT_NAME__" ${bins.jailedClaude}/bin/jailed-claude; then
+                echo "expected __SLOP_ENV_PROJECT_NAME__ placeholder in jailed-claude launch script" >&2
+                exit 1
+              fi
+              echo "ok" > $out
+            '';
+          # Slice 18.6: lib/slop-env/defaults/ and the template's
+          # claude-config/ are intentionally duplicated (one is library-
+          # lifecycle, one is project-lifecycle). This check fails when
+          # they drift accidentally; a `.diverged` sentinel in the
+          # template opts out deliberately.
+          template-default-config-matches-lib = import ./tests/template-default-config-matches-lib.nix {
+            inherit pkgs;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
@@ -94,6 +139,29 @@
             };
           } else { }
         )
+      );
+
+      # Slice 18: zero-touch entry points for existing-Nix-flake users.
+      # `nix run github:pete3n/nix-slop-dev#claude` works from any project
+      # root without touching the project's flake.nix. The lib-bundled
+      # defaults (lib/slop-env/defaults/) feed mkBins's CLAUDE.md / rules
+      # when no caller-supplied paths are given.
+      apps = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          bins = (self.lib.slopEnv pkgs).mkBins { };
+        in
+        {
+          claude = {
+            type = "app";
+            program = "${bins.claude}/bin/claude";
+          };
+          jail-shell = {
+            type = "app";
+            program = "${bins.jail-shell}/bin/jail-shell";
+          };
+        }
       );
 
       # Slop Env construction lib. Templates and apps call lib.slopEnv pkgs

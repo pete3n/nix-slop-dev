@@ -68,7 +68,7 @@ rec {
   mkJailCombinators =
     { jail
     , projectName
-    , skillsDir
+    , skillsDir ? null
     , claudeMd
     , claudeSettings
     , basePkgs
@@ -92,7 +92,12 @@ rec {
 
       # Ephemeral config dir; project-fixed content written on top.
       (tmpfs (noescape cfgDir))
-      (ro-bind "${skillsDir}" (noescape "${cfgDir}/skills"))
+    ]
+    # Skills dir is the per-project starting bundle. Apps' zero-touch
+    # path leaves it null (no project-specific skills) — slice 18 spec
+    # bundles only CLAUDE.md + rules under lib/slop-env/defaults/.
+    ++ lib.optional (skillsDir != null) (ro-bind "${skillsDir}" (noescape "${cfgDir}/skills"))
+    ++ [
       (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
       (write-text (noescape "${cfgDir}/CLAUDE.md") claudeMd)
 
