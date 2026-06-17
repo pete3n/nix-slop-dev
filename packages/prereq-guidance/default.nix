@@ -24,7 +24,11 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
 
     nixos_marker="''${1:-/etc/NIXOS}"
     userns_sysctl_path="''${2:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
-    apparmor_profiles_path="''${3:-/sys/kernel/security/apparmor/profiles}"
+    # The legacy /sys/kernel/security/apparmor/profiles file is 0440 (root
+    # only). The newer policy/profiles/ directory is world-listable on
+    # AppArmor 3.0+ (Ubuntu 22.04+, where the userns sysctl also lives), so
+    # we look there for a `nix-slop-dev-bwrap[.NN]` entry.
+    apparmor_profiles_path="''${3:-/sys/kernel/security/apparmor/policy/profiles}"
     apparmor_profile_name=nix-slop-dev-bwrap
     setup_linux_cmd='nix run github:pete3n/nix-slop-dev#setup-linux -- --apply'
     prereq_ok=1
@@ -104,10 +108,16 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     	read -r userns_val < "$userns_sysctl_path" 2>/dev/null || true
     	if [ "$userns_val" = "1" ]; then
     		profile_loaded=0
-    		if [ -r "$apparmor_profiles_path" ] \
-    			&& grep -q "^''${apparmor_profile_name} " "$apparmor_profiles_path" 2>/dev/null; then
-    			profile_loaded=1
-    		fi
+    		# Match either the bare profile name or name.NN (the generation
+    		# suffix AppArmor adds at load time). The trailing literal `.`
+    		# stops nix-slop-dev-bwrap-foo from false-positiving.
+    		for _aa_entry in "$apparmor_profiles_path/''${apparmor_profile_name}" \
+    			"$apparmor_profiles_path/''${apparmor_profile_name}".*; do
+    			if [ -e "$_aa_entry" ]; then
+    				profile_loaded=1
+    				break
+    			fi
+    		done
     		if [ "$profile_loaded" != 1 ]; then
     			printf '\033[1;33m⚠ Unprivileged user namespaces are restricted (Ubuntu 23.10+/24.04 default) and the nix-slop-dev-bwrap AppArmor profile is not loaded.\033[0m\n'
     			printf '  bubblewrap (the Jail) needs to create a user namespace; it will fail until\n'

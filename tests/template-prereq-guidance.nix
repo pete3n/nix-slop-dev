@@ -22,11 +22,16 @@ pkgs.runCommand "template-prereq-guidance-tests" { } ''
   # the test stand in its own files for both branches.
   printf '1\n' > userns-restricted
   printf '0\n' > userns-permitted
-  # AppArmor profile list fixture: matches the format /sys exposes — one
-  # line per loaded profile. We need two: one without and one with the
-  # nix-slop-dev-bwrap profile, to drive both branches of the userns check.
-  printf 'unconfined (enforce)\n' > apparmor-no-bwrap-profile
-  printf 'unconfined (enforce)\nnix-slop-dev-bwrap (enforce)\n' > apparmor-bwrap-profile-loaded
+  # AppArmor profile fixtures match the policy/profiles/ directory shape:
+  # one subdirectory per loaded profile, named profile-name plus a .NN
+  # generation suffix (e.g. nix-slop-dev-bwrap.193). We need two fixtures:
+  # one without and one with the nix-slop-dev-bwrap profile present, to
+  # drive both branches of the userns check.
+  mkdir apparmor-no-bwrap-profile
+  : > apparmor-no-bwrap-profile/unconfined.5
+  mkdir apparmor-bwrap-profile-loaded
+  : > apparmor-bwrap-profile-loaded/unconfined.5
+  : > apparmor-bwrap-profile-loaded/nix-slop-dev-bwrap.193
 
   # Non-NixOS: guidance points at setup-linux, not the NixOS module.
   nonnixos="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" 2>&1 || true)"

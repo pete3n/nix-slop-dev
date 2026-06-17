@@ -18,7 +18,12 @@ pkgs.writeShellScriptBin "setup-linux" # bash
 
     sudoers_file=/etc/sudoers.d/sandboxed
     userns_sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-    apparmor_profiles_path=/sys/kernel/security/apparmor/profiles
+    # The legacy /sys/kernel/security/apparmor/profiles file is 0440 (root
+    # only), so we use the newer policy/profiles/ directory: world-listable
+    # on AppArmor 3.0+ (Ubuntu 22.04+, where the userns sysctl also lives).
+    # Each loaded profile appears as a directory whose name is the profile
+    # name plus a generation suffix (e.g. nix-slop-dev-bwrap.193).
+    apparmor_profiles_path=/sys/kernel/security/apparmor/policy/profiles
     apparmor_profile_name=nix-slop-dev-bwrap
     cgroup_controllers=/sys/fs/cgroup/cgroup.controllers
 
@@ -48,15 +53,18 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	auditd_state="$(systemctl is-active auditd 2>/dev/null || true)"
     	# AppArmor unprivileged-userns sysctl value, or "" when the knob is absent.
     	userns_sysctl="$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)"
-    	# nix-slop-dev-bwrap AppArmor profile loaded? Securityfs profile list is
-    	# world-readable on Ubuntu. Match the name at column 0 with a trailing
-    	# space so a future profile prefixed with the same string can't false-
-    	# positive (e.g. nix-slop-dev-bwrap-foo).
+    	# nix-slop-dev-bwrap AppArmor profile loaded? Check the policy/profiles
+    	# directory for an entry matching the profile name (with or without
+    	# the .NN generation suffix). The trailing literal `.` prevents a
+    	# future nix-slop-dev-bwrap-foo from false-positiving.
     	apparmor_profile_loaded=0
-    	if ${pkgs.gnugrep}/bin/grep -q "^''${apparmor_profile_name} " \
-    		"$apparmor_profiles_path" 2>/dev/null; then
-    		apparmor_profile_loaded=1
-    	fi
+    	for _aa_entry in "$apparmor_profiles_path/''${apparmor_profile_name}" \
+    		"$apparmor_profiles_path/''${apparmor_profile_name}".*; do
+    		if [ -e "$_aa_entry" ]; then
+    			apparmor_profile_loaded=1
+    			break
+    		fi
+    	done
 
     	printf 'setup-linux: Sandbox/Jail prerequisites\n\n'
     	if run_checks \
@@ -98,10 +106,13 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	# mode idempotent — a second run is a no-op, not a reinstall.
     	userns_sysctl_now="$(${pkgs.coreutils}/bin/cat "$userns_sysctl_path" 2>/dev/null || true)"
     	apparmor_profile_loaded=0
-    	if ${pkgs.gnugrep}/bin/grep -q "^''${apparmor_profile_name} " \
-    		"$apparmor_profiles_path" 2>/dev/null; then
-    		apparmor_profile_loaded=1
-    	fi
+    	for _aa_entry in "$apparmor_profiles_path/''${apparmor_profile_name}" \
+    		"$apparmor_profiles_path/''${apparmor_profile_name}".*; do
+    		if [ -e "$_aa_entry" ]; then
+    			apparmor_profile_loaded=1
+    			break
+    		fi
+    	done
     	if [ "$userns_sysctl_now" != 1 ] || [ "$apparmor_profile_loaded" = 1 ]; then
     		userns_ok=1
     		if [ "$apparmor_profile_loaded" = 1 ]; then
