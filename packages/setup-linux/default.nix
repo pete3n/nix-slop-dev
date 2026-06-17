@@ -25,15 +25,20 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     # name plus a generation suffix (e.g. nix-slop-dev-bwrap.193).
     apparmor_profiles_path=/sys/kernel/security/apparmor/policy/profiles
     apparmor_profile_name=nix-slop-dev-bwrap
+    apparmor_profile_path="/etc/apparmor.d/''${apparmor_profile_name}"
+    bwrap_glob='/nix/store/*/bin/bwrap'
     cgroup_controllers=/sys/fs/cgroup/cgroup.controllers
 
     _usage() {
     	printf >&2 '%s\n' \
-    	"Usage: setup-linux [--check | --apply]" \
+    	"Usage: setup-linux [--check | --apply | --remove]" \
     	"" \
-    	"  --check   Diagnose Sandbox/Jail prerequisites; mutate nothing (default)" \
-    	"  --apply   Show planned changes, confirm, then write the sudoers drop-in" \
-    	"            and install/enable auditd"
+    	"  --check    Diagnose Sandbox/Jail prerequisites; mutate nothing (default)" \
+    	"  --apply    Show planned changes, confirm, then write the sudoers drop-in" \
+    	"             and install/enable auditd" \
+    	"  --remove   Show planned removals, confirm, then unload + delete the" \
+    	"             AppArmor profile and the sudoers drop-in. Does not touch" \
+    	"             auditd — remove it by hand (apt/dnf) if you no longer need it"
     }
 
     # Distro ID from os-release (e.g. ubuntu, debian, fedora), or "" if unknown.
@@ -90,8 +95,6 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     _run_apply_mode() {
     	apply_user="$(${pkgs.coreutils}/bin/id -un)"
     	distro_id="$(_detect_distro_id)"
-    	apparmor_profile_path="/etc/apparmor.d/''${apparmor_profile_name}"
-    	bwrap_glob='/nix/store/*/bin/bwrap'
 
     	if [ -f "$sudoers_file" ]; then sudoers_ok=1; else sudoers_ok=0; fi
     	if [ "$(systemctl is-active auditd 2>/dev/null || true)" = active ]; then
@@ -210,6 +213,78 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	exit 0
     }
 
+    # ----- remove mode -----
+    # Symmetric to apply mode: compute the removal plan and get confirmation
+    # BEFORE any host mutation. Always unload the AppArmor profile before
+    # deleting its file so a "loaded but file-gone" state is never created.
+    # We re-render the profile content to a tempfile for `apparmor_parser -R`
+    # so unload works even if /etc/apparmor.d/nix-slop-dev-bwrap was already
+    # deleted (apparmor_parser identifies profiles by name from the file
+    # content, not by the file path).
+    _run_remove_mode() {
+    	if [ -f "$apparmor_profile_path" ]; then
+    		apparmor_profile_present=1
+    	else
+    		apparmor_profile_present=0
+    	fi
+
+    	apparmor_profile_loaded=0
+    	for _aa_entry in "$apparmor_profiles_path/''${apparmor_profile_name}" \
+    		"$apparmor_profiles_path/''${apparmor_profile_name}".*; do
+    		if [ -e "$_aa_entry" ]; then
+    			apparmor_profile_loaded=1
+    			break
+    		fi
+    	done
+
+    	if [ -f "$sudoers_file" ]; then
+    		sudoers_present=1
+    	else
+    		sudoers_present=0
+    	fi
+
+    	plan="$(plan_remove_actions "$apparmor_profile_present" \
+    		"$apparmor_profile_loaded" "$sudoers_present")"
+    	if [ -z "$plan" ]; then
+    		printf 'setup-linux: nothing to remove (host already clean).\n'
+    		exit 0
+    	fi
+
+    	printf 'setup-linux: the following will be removed:\n'
+    	printf '%s\n' "$plan" | ${pkgs.gnused}/bin/sed 's/^/  - /'
+    	printf '\nProceed? [y/N] '
+    	read -r reply || reply=""
+    	case "$reply" in
+    		y | Y | yes | YES) ;;
+    		*)
+    			printf 'Aborted; no changes made.\n'
+    			exit 0
+    			;;
+    	esac
+
+    	if [ "$apparmor_profile_loaded" = 1 ] || [ "$apparmor_profile_present" = 1 ]; then
+    		# Unload first. Re-rendering to a tempfile lets -R work even when
+    		# the file has already been deleted from /etc/apparmor.d/.
+    		if [ "$apparmor_profile_loaded" = 1 ]; then
+    			tmp_aa="$(${pkgs.coreutils}/bin/mktemp)"
+    			apparmor_profile_content "$apparmor_profile_name" "$bwrap_glob" > "$tmp_aa"
+    			sudo apparmor_parser -R "$tmp_aa" \
+    				|| printf >&2 'setup-linux: warning: apparmor_parser -R failed; profile may still be loaded\n'
+    			${pkgs.coreutils}/bin/rm -f "$tmp_aa"
+    		fi
+    		if [ "$apparmor_profile_present" = 1 ]; then
+    			sudo ${pkgs.coreutils}/bin/rm -f "$apparmor_profile_path"
+    		fi
+    	fi
+
+    	if [ "$sudoers_present" = 1 ]; then
+    		sudo ${pkgs.coreutils}/bin/rm -f "$sudoers_file"
+    	fi
+
+    	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'
+    	exit 0
+    }
+
     mode=check
     while [ $# -gt 0 ]; do
     	case "$1" in
@@ -219,6 +294,10 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     			;;
     		--check)
     			mode=check
+    			shift
+    			;;
+    		--remove)
+    			mode=remove
     			shift
     			;;
     		-h | --help)
@@ -233,9 +312,9 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	esac
     done
 
-    if [ "$mode" = apply ]; then
-    	_run_apply_mode
-    else
-    	_run_check_mode
-    fi
+    case "$mode" in
+    	apply)  _run_apply_mode  ;;
+    	remove) _run_remove_mode ;;
+    	*)      _run_check_mode  ;;
+    esac
   ''

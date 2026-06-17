@@ -113,3 +113,25 @@ plan_actions() {
 	fi
 	return 0
 }
+
+# Compute the idempotent removal plan, mirroring plan_actions. Takes three
+# presence booleans (1 = present and would be removed; 0 = already absent,
+# skip) and prints one line per planned action. AppArmor profile-on-disk and
+# profile-loaded share a single action line — the remove path unloads then
+# deletes as one logical step. Prints nothing when nothing is left to remove.
+# Always returns 0. Note: auditd is intentionally NOT touched by --remove —
+# it's a general-purpose subsystem users may want for other reasons; doc'd as
+# a manual step in non-nixos-linux.md.
+plan_remove_actions() {
+	apparmor_profile_present="$1"
+	apparmor_profile_loaded="$2"
+	sudoers_present="$3"
+
+	if [ "$apparmor_profile_present" = "1" ] || [ "$apparmor_profile_loaded" = "1" ]; then
+		printf 'unload and delete AppArmor profile (/etc/apparmor.d/nix-slop-dev-bwrap)\n'
+	fi
+	if [ "$sudoers_present" = "1" ]; then
+		printf 'delete sudoers drop-in (/etc/sudoers.d/sandboxed)\n'
+	fi
+	return 0
+}

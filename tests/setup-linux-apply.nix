@@ -129,5 +129,40 @@ $plan"
     || fail "fully-unconfigured + restricted userns should plan three actions; got:
 $plan"
 
+  # plan_remove_actions is the symmetric uninstall planner. Args (1 = present
+  # and to be removed; 0 = already absent, skip): apparmor_profile_present,
+  # apparmor_profile_loaded, sudoers_present. The profile-present and
+  # profile-loaded facts collapse to one action line — unload+delete is one
+  # logical step.
+  plan=$(plan_remove_actions 0 0 0)
+  [ -z "$plan" ] || fail "fully-clean host should yield an empty remove plan; got:
+$plan"
+
+  plan=$(plan_remove_actions 1 0 0)
+  case "$plan" in *AppArmor*) ;; *) fail "file-present-only should plan AppArmor removal; got: $plan" ;; esac
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 1 ] \
+    || fail "file-present-only should plan exactly one action; got:
+$plan"
+
+  plan=$(plan_remove_actions 0 1 0)
+  case "$plan" in *AppArmor*) ;; *) fail "loaded-only should plan AppArmor removal; got: $plan" ;; esac
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 1 ] \
+    || fail "loaded-only should plan exactly one action; got:
+$plan"
+
+  plan=$(plan_remove_actions 1 1 0)
+  case "$plan" in *AppArmor*) ;; *) fail "file+loaded should plan AppArmor removal; got: $plan" ;; esac
+  case "$plan" in *sudoers*) fail "file+loaded only should NOT plan sudoers removal; got: $plan" ;; *) ;; esac
+
+  plan=$(plan_remove_actions 0 0 1)
+  case "$plan" in *sudoers*) ;; *) fail "sudoers-only should plan sudoers removal; got: $plan" ;; esac
+  case "$plan" in *AppArmor*) fail "sudoers-only should NOT plan AppArmor removal; got: $plan" ;; *) ;; esac
+
+  plan=$(plan_remove_actions 1 1 1)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 2 ] \
+    || fail "fully-installed host should plan two remove actions; got:
+$plan"
+  case "$plan" in *auditd*) fail "remove plan must never mention auditd (separate concern); got: $plan" ;; *) ;; esac
+
   touch "$out"
 ''

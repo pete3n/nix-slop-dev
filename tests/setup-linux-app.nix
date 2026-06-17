@@ -27,11 +27,16 @@ $report" ;;
     esac
   done
 
-  # --help describes both modes and exits 0.
+  # --help describes every mode and exits 0.
   help_out="$(${setupLinux}/bin/setup-linux --help 2>&1)" && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "--help should exit 0, got $status"
-  case "$help_out" in *--apply*) ;; *) fail "--help should mention --apply; got:
-$help_out" ;; esac
+  for flag in --apply --remove; do
+    case "$help_out" in
+      *"$flag"*) ;;
+      *) fail "--help should mention $flag; got:
+$help_out" ;;
+    esac
+  done
 
   # An unknown argument is rejected.
   ${setupLinux}/bin/setup-linux --bogus >/dev/null 2>&1 && status=0 || status=$?
@@ -50,6 +55,18 @@ $apply_out"
 $apply_out" ;;
   esac
   [ ! -e /etc/sudoers.d/sandboxed ] || fail "declining --apply must not create the sudoers drop-in"
+
+  # remove mode on a fully-clean host (build sandbox) is a no-op that exits 0
+  # without prompting — there's nothing to remove. This is the idempotency
+  # contract: running --remove twice is safe.
+  remove_out="$(${setupLinux}/bin/setup-linux --remove 2>&1)" && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "--remove on a clean host should exit 0, got $status; output:
+$remove_out"
+  case "$remove_out" in
+    *"nothing to remove"*) ;;
+    *) fail "--remove on a clean host should report 'nothing to remove'; got:
+$remove_out" ;;
+  esac
 
   touch "$out"
 ''
