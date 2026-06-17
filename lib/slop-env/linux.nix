@@ -1,5 +1,6 @@
 { pkgs
 , sandboxed
+, prereqGuidance
 , claude-pkg
 , jail
 , shared
@@ -146,24 +147,11 @@ let
           # Setup checks
           _setup_ok=1
 
-          # Check system prerequisites
-          if ! systemctl is-active --quiet auditd 2>/dev/null; then
-          	printf '\033[1;33m⚠ auditd is not running.\033[0m\n'
-          	printf '  The sandboxed wrapper requires auditd for violation detection.\n'
-          	printf '  Add to your NixOS config:\n'
-          	printf '    security.sandboxed.enable = true;\n'
-          	printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
-          	_setup_ok=0
-          fi
-
-          if ! sudo -n ${pkgs.systemd}/bin/systemd-run --help >/dev/null 2>&1; then
-          	printf '\033[1;33m⚠ NOPASSWD sudo for systemd-run is not configured.\033[0m\n'
-          	printf '  The sandboxed wrapper needs passwordless sudo for:\n'
-          	printf '    systemd-run, systemctl, auditctl, ausearch, tail\n'
-          	printf '  Add to your NixOS config:\n'
-          	printf '    security.sandboxed.users = [ "<your-user>" ];\n\n'
-          	_setup_ok=0
-          fi
+          # Sandbox/Jail prerequisites (auditd + NOPASSWD sudo for the
+          # privileged tool set). slop-prereq-guidance picks distro-aware
+          # advice based on /etc/NIXOS — on NixOS it points at the
+          # security.sandboxed module; elsewhere it points at setup-linux.
+          ${prereqGuidance}/bin/slop-prereq-guidance || _setup_ok=0
 
           # Check Claude credentials
           if [ ! -s "$CLAUDE_SHARED_DIR/.credentials.json" ]; then

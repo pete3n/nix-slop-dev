@@ -34,6 +34,7 @@
         {
           sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
           setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
+          prereq-guidance = pkgs.callPackage ./packages/prereq-guidance/default.nix { };
           default = self.packages.${system}.sandboxed;
         }
       );
@@ -214,6 +215,16 @@
           setup-linux-apply = import ./tests/setup-linux-apply.nix {
             inherit pkgs;
           };
+
+          # Slice 20 (#06 lib-layer rewrite): slop-prereq-guidance picks
+          # distro-aware advice (NixOS module options vs setup-linux) at
+          # runtime via the /etc/NIXOS marker. The marker path is
+          # overridable by argument so both branches are exercised in
+          # the build sandbox; the live auditd/sudo probes are HITL.
+          template-prereq-guidance = import ./tests/template-prereq-guidance.nix {
+            inherit pkgs;
+            prereqGuidance = self.packages.${system}.prereq-guidance;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
@@ -273,6 +284,7 @@
           import ./lib/slop-env {
             inherit pkgs;
             sandboxed = self.packages.${system}.sandboxed;
+            prereqGuidance = self.packages.${system}.prereq-guidance;
             claude-pkg = llm-agents.packages.${system}.claude-code;
             jail = jail-nix.lib.init pkgs;
           };

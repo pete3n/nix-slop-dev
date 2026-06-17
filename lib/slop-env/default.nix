@@ -1,5 +1,6 @@
 { pkgs
 , sandboxed
+, prereqGuidance
 , claude-pkg
 , jail
 }:
@@ -22,7 +23,7 @@
 
 let
   shared = import ./shared.nix { inherit pkgs; };
-  linux = import ./linux.nix { inherit pkgs sandboxed claude-pkg jail shared; };
+  linux = import ./linux.nix { inherit pkgs sandboxed prereqGuidance claude-pkg jail shared; };
 in
 {
   inherit (linux) mkShell mkBins;
