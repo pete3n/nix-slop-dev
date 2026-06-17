@@ -30,6 +30,8 @@ let
     , projectPkgs ? [ ]
     , projectEnv ? { }
     , extraCombinators ? [ ]
+    , extraShellHook ? ""
+    , extraSandboxedEnvForwards ? [ ]
     }:
     let
       claudeMd = shared.mkClaudeMd { inherit rulesDir claudeMdFile; };
@@ -172,7 +174,7 @@ let
 
           if [ "$_setup_ok" -eq 1 ]; then
           	printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
-          fi
+          fi${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
 
           # Jailed Claude Code
           claude() {
@@ -180,7 +182,7 @@ let
           	touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
           	sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
           		-e CLAUDE_CONFIG_DIR \
-          		setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
+          		${lib.concatMapStrings (v: "-e ${v} \\\n\t\t") extraSandboxedEnvForwards}setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
           }
           alias jail-shell="setpriv --ambient-caps=-sys_nice -- jailed-shell"
         '';
@@ -191,10 +193,16 @@ let
 
   mkShell = args:
     let
-      bins = mkBins args;
+      # `name` is a mkShell-level convenience (devShell store-path name).
+      # Strip it out before forwarding the rest to mkBins, which doesn't
+      # use it. Slice 19.5 added this so the nvim template can keep its
+      # historical "nvim-claude-devShell" devShell name.
+      binArgs = builtins.removeAttrs args [ "name" ];
+      bins = mkBins binArgs;
       projectPkgs = args.projectPkgs or [ ];
     in
     pkgs.mkShell {
+      name = args.name or "nix-shell";
       packages = projectPkgs ++ bins.sandboxedPackages ++ [ bins.jailedClaude bins.jailedShell ];
       inherit (bins) shellHook;
     };

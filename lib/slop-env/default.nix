@@ -31,4 +31,10 @@ in
     basePkgs = shared.defaultBasePkgs;
     claudeSettings = shared.defaultClaudeSettings;
   };
+
+  # Slice 19.1: re-expose the initialised jail-nix object. Templates that
+  # need to construct extra combinators (e.g. nvim-dev's bind/try-fwd-env
+  # entries via `extraCombinators`) can use `slop.jail.combinators.*`
+  # without taking jail-nix as a direct flake input themselves.
+  inherit jail;
 }

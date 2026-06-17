@@ -3,15 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    # Used only by the template-byte-equality check (so it can call the
-    # template's outputs function manually). Not consumed by the lib or
-    # by runtime packages.
+    # Used only by the template-byte-equality checks (so they can call
+    # the templates' outputs functions manually). Not consumed by the
+    # lib or by runtime packages. The nvim template additionally needs
+    # flake-utils + gen-luarc for the byte-eq path (slice 19.4).
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
+    flake-utils.url = "github:numtide/flake-utils";
+    gen-luarc.url = "github:mrcjkb/nix-gen-luarc-json";
   };
 
   outputs =
-    { self, nixpkgs, jail-nix, llm-agents, ... }:
+    { self, nixpkgs, jail-nix, llm-agents, flake-utils, gen-luarc, ... }:
     let
       # Darwin isn't currently supported by the sanbox solution
       linuxSystems = [
@@ -39,7 +42,10 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           slop = self.lib.slopEnv pkgs;
-          expected = [ "defaults" "mkBins" "mkShell" ];
+          # Slice 19.1: lib re-exposes the initialised jail-nix object so
+          # templates can build extraCombinators without importing jail-nix
+          # themselves (the nvim template's nvim-dev paths use this).
+          expected = [ "defaults" "jail" "mkBins" "mkShell" ];
           actual = builtins.attrNames slop;
         in
         {
@@ -132,10 +138,55 @@
           template-default-config-matches-lib = import ./tests/template-default-config-matches-lib.nix {
             inherit pkgs;
           };
+
+          # Slice 19.2: mkBins/mkShell accept extraShellHook (string) that
+          # the lib appends to its emitted shellHook. The nvim template
+          # uses this for .luarc.json symlinking, swap-dir reset, and the
+          # nvim-dev config symlink — bits that today live in an inline
+          # template shellHook the refactor needs to dissolve.
+          lib-slop-env-extra-shell-hook =
+            let
+              marker = "SLOP_HOOK_MARKER_FROM_TEST";
+              bins = (self.lib.slopEnv pkgs).mkBins {
+                extraShellHook = "echo ${marker}";
+              };
+            in
+            if pkgs.lib.hasInfix marker bins.shellHook then
+              pkgs.runCommand "lib-slop-env-extra-shell-hook" { } ''
+                echo "extraShellHook content reached the emitted shellHook" > $out
+              ''
+            else
+              throw "extraShellHook arg did not flow into the emitted shellHook";
+
+          # Slice 19.3: mkBins/mkShell accept extraSandboxedEnvForwards
+          # (list of env var names) appended as -e flags to the claude()
+          # function's sandboxed invocation inside the emitted shellHook.
+          # The nvim template needs this because LUA_PATH is
+          # $PWD-dependent and the jail-side try-fwd-env combinator only
+          # takes effect once the sandbox lets the var through.
+          lib-slop-env-extra-sandboxed-env =
+            let
+              bins = (self.lib.slopEnv pkgs).mkBins {
+                extraSandboxedEnvForwards = [ "LUA_PATH" ];
+              };
+            in
+            if pkgs.lib.hasInfix "-e LUA_PATH" bins.shellHook then
+              pkgs.runCommand "lib-slop-env-extra-sandboxed-env" { } ''
+                echo "extraSandboxedEnvForwards entry added a -e flag" > $out
+              ''
+            else
+              throw "extraSandboxedEnvForwards arg did not add an -e flag to the claude() sandboxed call";
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
               inherit self pkgs jail-nix llm-agents;
+            };
+
+            # Slice 19.4: byte-equality baseline for the nvim template.
+            # Captured pre-refactor so slice 19.5's template flip can
+            # prove it preserves the rendered devShell derivation.
+            template-nvim-dev-drv = import ./tests/template-nvim-dev-drv.nix {
+              inherit self pkgs jail-nix llm-agents flake-utils gen-luarc;
             };
           } else { }
         )
