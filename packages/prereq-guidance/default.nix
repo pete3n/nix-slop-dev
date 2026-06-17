@@ -2,11 +2,15 @@
   pkgs,
   ...
 }:
-# Reports unmet Sandbox prerequisites (auditd running, NOPASSWD sudo) with
+# Reports unmet Sandbox prerequisites (auditd running, NOPASSWD sudo, and on
+# non-NixOS hosts the AppArmor unprivileged-userns restriction) with
 # distro-aware remediation, shared by the claude-code template shellHooks.
-# Returns 0 when all system prerequisites are met, nonzero otherwise. The
-# NixOS marker is overridable by argument for testing; production calls pass
-# nothing and detect /etc/NIXOS.
+# Returns 0 when all system prerequisites are met, nonzero otherwise.
+#
+# Both the NixOS marker and the userns sysctl path are overridable by
+# argument so the build sandbox can exercise every branch without touching
+# /etc/NIXOS or /proc/sys; production calls pass nothing and detect the real
+# paths.
 #
 # On non-NixOS we always offer the canonical one-shot
 #   `nix run github:pete3n/nix-slop-dev#setup-linux -- --apply`
@@ -19,6 +23,7 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     set -u
 
     nixos_marker="''${1:-/etc/NIXOS}"
+    userns_sysctl_path="''${2:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
     setup_linux_cmd='nix run github:pete3n/nix-slop-dev#setup-linux -- --apply'
     prereq_ok=1
 
@@ -84,6 +89,25 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     		printf '  Or see docs/non-nixos-linux.md for the manual sudoers steps.\n\n'
     	fi
     	prereq_ok=0
+    fi
+
+    # Ubuntu 23.10+/24.04 restricts unprivileged user namespaces via an
+    # AppArmor sysctl. bubblewrap (the Jail) cannot create a userns when this
+    # is on, so `claude` / `jail-shell` would launch and then fail at exec
+    # time — catch it here, in the shellHook, before that happens. Skipped on
+    # NixOS where the knob isn't typically enabled.
+    if [ ! -f "$nixos_marker" ] && [ -r "$userns_sysctl_path" ]; then
+    	userns_val=""
+    	read -r userns_val < "$userns_sysctl_path" 2>/dev/null || true
+    	if [ "$userns_val" = "1" ]; then
+    		printf '\033[1;33m⚠ Unprivileged user namespaces are restricted (Ubuntu 23.10+/24.04 default).\033[0m\n'
+    		printf '  bubblewrap (the Jail) needs to create a user namespace; it will fail until\n'
+    		printf '  an AppArmor profile grants the userns capability to bwrap.\n'
+    		printf '  Run (apply mode installs a narrow profile granting userns to bwrap only):\n'
+    		printf '    %s\n' "$setup_linux_cmd"
+    		printf '  Or see docs/non-nixos-linux.md §4 for the manual profile steps.\n\n'
+    		prereq_ok=0
+    	fi
     fi
 
     [ "$prereq_ok" -eq 1 ]

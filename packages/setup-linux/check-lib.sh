@@ -63,7 +63,7 @@ check_sudoers() {
 check_userns_restriction() {
 	userns_sysctl="$1"
 	if [ "$userns_sysctl" = "1" ]; then
-		printf '✗ unprivileged user namespaces restricted (kernel.apparmor_restrict_unprivileged_userns=1) — bubblewrap Jail will fail; sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 or install an AppArmor profile\n'
+		printf '✗ unprivileged user namespaces restricted (kernel.apparmor_restrict_unprivileged_userns=1) — bubblewrap Jail will fail; run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply (apply mode installs a narrow AppArmor profile granting userns to bwrap only — see docs/non-nixos-linux.md §4 for manual steps)\n'
 		return 1
 	fi
 	printf '✓ unprivileged user namespaces permitted\n'

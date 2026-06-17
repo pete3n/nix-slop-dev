@@ -108,6 +108,21 @@ sudo apparmor_parser -Q /etc/apparmor.d/nix-slop-dev-bwrap   # parse check
 sudo apparmor_parser -r /etc/apparmor.d/nix-slop-dev-bwrap   # load
 ```
 
+### Why not just flip the sysctl?
+
+`sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` would also let
+bubblewrap create the namespace — by lifting the restriction **for every
+process on the host**, not just bwrap. Ubuntu added this restriction by
+default because unprivileged user namespaces have historically been a kernel
+CVE vector (bugs in fs / netfilter / etc. become reachable when a process
+gets "root in a namespace"); flipping it system-wide restores the broader
+attack surface. The AppArmor profile narrows the grant to bwrap's
+`/nix/store/*/bin/bwrap` store-path glob — same end result for the Jail,
+much smaller security regression. The runtime `sysctl -w` also reverts on
+reboot, so persisting it would require an `/etc/sysctl.d/` drop-in — at
+which point you have a persistent system-wide regression for marginal
+convenience. The AppArmor profile is the recommended path.
+
 ## 5. Verify
 
 ```sh
