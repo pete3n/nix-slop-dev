@@ -187,10 +187,16 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     	| ${pkgs.gawk}/bin/awk '
     		function emit(    _dst, _port) {
     			if (_evt_exe == "") return
-    			if (_evt_exit != "-115" && _evt_exit != "-111") return
-    			if (_evt_exe !~ /^\/nix\/store\//) return
+    			# Audit rule already filters at the kernel level: arch+S=connect
+    			# +success=0 +uid=$USER +auid=4294967295 +key=sandbox-...
+    			# Everything reaching emit() is a real sandbox-scoped failure,
+    			# so we no longer second-guess by exit code or by exe path
+    			# (host binaries like /usr/bin/curl are legitimate targets).
     			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=local/) return
-    			if (_evt_key !~ /^sandbox-[^-]+-[0-9]{8}-[0-9]{6}$/) return
+    			# Key regex: sandbox-<binary>-<YYYYMMDD>-<HHMMSS>. The binary
+    			# can contain dashes (setup-linux, jailed-claude), so we use
+    			# .+ rather than [^-]+ for that segment.
+    			if (_evt_key !~ /^sandbox-.+-[0-9]{8}-[0-9]{6}$/) return
 
     			if (_evt_saddr != "") {
     				_dst  = _evt_saddr; gsub(/.*laddr=/, "", _dst);  gsub(/ .*/,      "", _dst)
@@ -279,11 +285,11 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     _cleanup() {
     	sudo "$AUDITCTL" \
-    		-d always,exit -F arch=b64 -S connect \
+    		-d always,exit -F arch=b64 -S connect -F success=0 \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	sudo "$AUDITCTL" \
-    		-d always,exit -F arch=b32 -S connect \
+    		-d always,exit -F arch=b32 -S connect -F success=0 \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	[ -n "''${watch_pid:-}" ] && kill "''${watch_pid}" 2>/dev/null || true
@@ -403,12 +409,18 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		sudo "$AUDITCTL" -d "''${_rule#-a }" 2>/dev/null || true
     	done
 
+    # `-F success=0` filters at the kernel: only failed connects are
+    # logged, which is exactly what the sandbox alerts on (allowed
+    # destinations succeed and don't need to clutter the audit log).
+    # auid=4294967295 (the unset loginuid) scopes to processes spawned
+    # by `sudo systemd-run --pty` — i.e. our transient unit — so events
+    # from the user's regular shell don't get the sandbox key.
     sudo "$AUDITCTL" \
-    	-a always,exit -F arch=b64 -S connect \
+    	-a always,exit -F arch=b64 -S connect -F success=0 \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
     sudo "$AUDITCTL" \
-    	-a always,exit -F arch=b32 -S connect \
+    	-a always,exit -F arch=b32 -S connect -F success=0 \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
 
@@ -428,8 +440,11 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		'
     		function emit(    _msg) {
     			if (_evt_key != _key) return
-    			if (_evt_exit != "-115" && _evt_exit != "-111") return
-    			if (_evt_exe !~ /^\/nix\/store\//) return
+    			# Audit rule already filters at the kernel level
+    			# (success=0 + per-session key); everything reaching emit()
+    			# is a real sandbox-scoped failure. Host binaries running
+    			# inside the sandbox (e.g. /usr/bin/curl) are legitimate
+    			# targets and must not be filtered out by an exe path check.
     			if (_evt_saddr != "" && _evt_saddr ~ _allowed_re) return
 
     			_msg = "\r\n\033[1;31m╔══ SANDBOX VIOLATION ══════════════════════════════════════╗\033[0m\r\n" \
