@@ -373,7 +373,14 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		--property=IPAddressAllow=*)
     			_ip="''${_prop#--property=IPAddressAllow=}"
     			_ip="''${_ip%/*}"
-    			_escaped=$(printf '%s' "$_ip" | ${pkgs.gnused}/bin/sed 's/[.]/\\./g')
+    			# Two layers of escaping: sed emits `\\.` (two backslashes +
+    			# dot), so when awk parses _allowed_re as a string via -v it
+    			# converts `\\` → `\` and the final regex contains `\.` (a
+    			# literal-dot match). Without this, awk's string parser strips
+    			# the lone backslash from `\.` — emitting the warning
+    			# "escape sequence '\.' treated as plain '.'" and silently
+    			# widening every IP-octet match to a regex wildcard.
+    			_escaped=$(printf '%s' "$_ip" | ${pkgs.gnused}/bin/sed 's/[.]/\\\\./g')
     			allowed_re="''${allowed_re}|laddr=''${_escaped}"
     			;;
     	esac
