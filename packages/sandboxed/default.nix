@@ -62,7 +62,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     _usage() {
     	printf >&2 '%s\n' \
-    	"Usage: sandboxed [-q] [-a <host>]... [-e <var>]... <command> [args...]" \
+    	"Usage: sandboxed [-q] [-a <host>]... [-e <var>]... [--] <command> [args...]" \
     	"       sandboxed --wl-add <hostname|ip|cidr> ..." \
     	"       sandboxed --wl-del <hostname|ip|cidr> ..." \
     	"       sandboxed --wl-list" \
@@ -341,6 +341,13 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		fi
     		env_fwd+=("''${2}")
     		shift 2
+    		;;
+    	--)
+    		# Standard CLI separator. Without this, `--` would fall into
+    		# the *) branch below, leave the loop with $1=-- still set,
+    		# and crash `basename "$1"` with "missing operand".
+    		shift
+    		break
     		;;
     	*)
     		break
