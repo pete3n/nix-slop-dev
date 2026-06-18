@@ -47,13 +47,25 @@ check_auditd() {
 # The sudoers drop-in grants the invoking users passwordless access to the
 # host's five privileged tools by absolute path (ADR-0002). Apply mode writes
 # it; check mode only reports presence.
+#
+# Direct file detection is the fast path, but /etc/sudoers.d/ is typically
+# 0750 root:root and a non-root user not in the root group can't even
+# traverse into it (most visible on Fedora). When `[ -f … ]` fails for that
+# reason we fall back to a functional probe: `sudo -n auditctl -h` succeeds
+# without prompting if our NOPASSWD grant is active, which is the only way
+# the drop-in could be functional anyway — so a successful probe is proof
+# of presence even when we can't see the file directly.
 check_sudoers() {
 	sudoers_file="$1"
-	if [ -f "$sudoers_file" ]; then
+	if [ -f "$sudoers_file" ] 2>/dev/null; then
 		printf '✓ sudoers drop-in present (%s)\n' "$sudoers_file"
 		return 0
 	fi
-	printf '✗ sudoers drop-in missing (%s) — run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n' "$sudoers_file"
+	if sudo -n auditctl -h >/dev/null 2>&1; then
+		printf '✓ sudoers drop-in active (NOPASSWD probe via auditctl succeeded; %s not directly readable)\n' "$sudoers_file"
+		return 0
+	fi
+	printf '✗ sudoers drop-in missing or inactive (%s) — run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n' "$sudoers_file"
 	return 1
 }
 
