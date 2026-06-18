@@ -164,12 +164,26 @@ pkgs.writeShellScriptBin "setup-linux" # bash
 
     	# Write the sudoers drop-in, validated before install.
     	if [ "$sudoers_ok" != 1 ]; then
+    		# `detect_tool_paths` returns every standard sudo-path location
+    		# where the tool exists (newline-separated). Joining with ", "
+    		# yields the sudoers Cmnd_Spec list format and ensures that
+    		# whichever absolute path sudo's secure_path picks at invocation
+    		# time matches a NOPASSWD entry. Without this, merged-usr
+    		# distros (Fedora) where /sbin → /usr/sbin → /usr/bin all
+    		# coexist would silently fail NOPASSWD because sudoers would
+    		# only carry one of the path strings.
+    		_collect_paths() {
+    			out="$(detect_tool_paths "$1" \
+    				| ${pkgs.gawk}/bin/awk 'NR>1 {printf ", "} {printf "%s", $0}')"
+    			[ -n "$out" ] || return 1
+    			printf '%s' "$out"
+    		}
     		missing_tools=""
-    		tool_systemd_run="$(detect_tool_path systemd-run)" || missing_tools="''${missing_tools} systemd-run"
-    		tool_systemctl="$(detect_tool_path systemctl)"     || missing_tools="''${missing_tools} systemctl"
-    		tool_tail="$(detect_tool_path tail)"               || missing_tools="''${missing_tools} tail"
-    		tool_auditctl="$(detect_tool_path auditctl)"       || missing_tools="''${missing_tools} auditctl"
-    		tool_ausearch="$(detect_tool_path ausearch)"       || missing_tools="''${missing_tools} ausearch"
+    		tool_systemd_run="$(_collect_paths systemd-run)" || missing_tools="''${missing_tools} systemd-run"
+    		tool_systemctl="$(_collect_paths systemctl)"     || missing_tools="''${missing_tools} systemctl"
+    		tool_tail="$(_collect_paths tail)"               || missing_tools="''${missing_tools} tail"
+    		tool_auditctl="$(_collect_paths auditctl)"       || missing_tools="''${missing_tools} auditctl"
+    		tool_ausearch="$(_collect_paths ausearch)"       || missing_tools="''${missing_tools} ausearch"
     		if [ -n "$missing_tools" ]; then
     			printf >&2 'setup-linux: required tools not found:%s — cannot write sudoers.\n' "$missing_tools"
     			exit 1

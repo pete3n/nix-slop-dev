@@ -61,6 +61,51 @@ $content" ;;
   resolved=$(detect_tool_path no-such-tool-xyz "$PWD/sbindir") && status=0 || status=$?
   [ "$status" -ne 0 ] || fail "detect_tool_path missing tool should fail (rc=$status)"
 
+  # detect_tool_paths returns EVERY candidate path where the tool exists,
+  # one per line, deduplicated. This is what the sudoers writer needs
+  # because on merged-usr distros (Fedora) sudo's secure_path may resolve
+  # a tool to a path that differs from `command -v` even when both
+  # ultimately point at the same inode — and sudoers Cmnd matching is
+  # string-based.
+  mkdir -p multi-usr-bin multi-usr-sbin multi-bin multi-sbin
+  for d in multi-usr-bin multi-usr-sbin multi-bin multi-sbin; do
+    printf '#!/bin/sh\n' > "$d/multitool";  chmod +x "$d/multitool"
+  done
+
+  # All four candidate dirs have the tool; expect four distinct lines.
+  paths=$( PATH="$PWD/multi-usr-bin:$PATH" detect_tool_paths multitool \
+    "$PWD/multi-usr-sbin" "$PWD/multi-bin" "$PWD/multi-sbin" )
+  count=$(printf '%s\n' "$paths" | grep -c .)
+  [ "$count" -eq 4 ] \
+    || fail "detect_tool_paths should list all four locations, got $count:
+$paths"
+  case "$paths" in
+    *multi-usr-bin/multitool*) ;;
+    *) fail "detect_tool_paths missing the PATH-resolved entry; got:
+$paths" ;;
+  esac
+  case "$paths" in
+    *multi-sbin/multitool*) ;;
+    *) fail "detect_tool_paths missing a fallback-dir entry; got:
+$paths" ;;
+  esac
+
+  # When the same path would be emitted twice (e.g. PATH and fallback both
+  # resolve to the same string), deduplicate so the sudoers list doesn't
+  # carry duplicates.
+  paths=$( PATH="$PWD/multi-usr-bin:$PATH" detect_tool_paths multitool \
+    "$PWD/multi-usr-bin" "$PWD/multi-usr-sbin" )
+  count=$(printf '%s\n' "$paths" | grep -c .)
+  [ "$count" -eq 2 ] \
+    || fail "detect_tool_paths should dedupe; expected 2 lines, got $count:
+$paths"
+
+  # No matches anywhere → returns 1, prints nothing.
+  paths=$(detect_tool_paths no-such-tool-xyz "$PWD/nowhere") && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "detect_tool_paths missing tool should fail (rc=$status)"
+  [ -z "$paths" ] || fail "detect_tool_paths missing tool should print nothing; got:
+$paths"
+
   # auditd_install_cmd maps a distro ID to its package manager and the
   # distro-specific audit package name (Debian/Ubuntu: auditd; Fedora: audit).
   for deblike in ubuntu debian; do

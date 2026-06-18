@@ -52,6 +52,51 @@ detect_tool_path() {
 	return 1
 }
 
+# Multi-path variant: prints EVERY standard sudo-path location where the tool
+# exists (one path per line). Sudo's secure_path may resolve a tool to a
+# different absolute path than `command -v` returns — most visibly on
+# merged-usr systems where /sbin → /usr/sbin → /usr/bin share the same inode
+# but appear as distinct strings to sudoers Cmnd matching. Listing every
+# candidate in the sudoers rule guarantees that whichever string sudo picks
+# at invocation time hits a NOPASSWD entry. Returns 0 with paths on stdout
+# (one per line, deduplicated), or 1 with no output if the tool is found
+# nowhere. The candidate dirs default to the standard sudo secure_path set
+# but may be overridden (used by tests).
+detect_tool_paths() {
+	tool_name="$1"
+	shift
+	if [ "$#" -eq 0 ]; then
+		set -- /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin
+	fi
+
+	found=0
+	# Use spaces around entries so the case match below can detect a path
+	# anywhere in the seen list without false-positives on prefixes.
+	seen=" "
+
+	# The caller's PATH-resolved location is the natural first match.
+	user_path="$(command -v "$tool_name" 2>/dev/null || true)"
+	if [ -n "$user_path" ]; then
+		printf '%s\n' "$user_path"
+		seen="$seen$user_path "
+		found=1
+	fi
+
+	for _dir in "$@"; do
+		_candidate="$_dir/$tool_name"
+		case "$seen" in
+			*" $_candidate "*) continue ;;
+		esac
+		if [ -x "$_candidate" ]; then
+			printf '%s\n' "$_candidate"
+			seen="$seen$_candidate "
+			found=1
+		fi
+	done
+
+	[ "$found" -eq 1 ] || return 1
+}
+
 # Map an os-release distro ID to the command that installs auditd, accounting
 # for the package-name difference (Debian/Ubuntu ship "auditd"; Fedora ships
 # "audit"). Prints the command and returns 0, or returns 1 for an unsupported
