@@ -229,6 +229,30 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     }
 
     _set_whitelist() {
+    	# Auto-allow nameservers from /etc/resolv.conf. Without this, the
+    	# sandboxed unit cannot do its own DNS lookups, and any name-based
+    	# work inside the sandbox fails with curl(6)/"Could not resolve host"
+    	# (or equivalent). On Ubuntu this is invisible because resolv.conf
+    	# points at 127.0.0.53 — already covered by the unconditional
+    	# IPAddressAllow=127.0.0.0/8 below. On Debian/Fedora resolv.conf
+    	# typically points at a LAN/ISP resolver that the cgroup IP filter
+    	# would otherwise drop. The host already trusts those resolvers
+    	# (the calling script used them when resolving --allow hostnames),
+    	# so propagating that trust into the unit is the right default.
+    	if [ -r /etc/resolv.conf ]; then
+    		while IFS= read -r _ns; do
+    			[ -z "$_ns" ] && continue
+    			case "$_ns" in
+    				*:*) allow_props="''${allow_props} --property=IPAddressAllow=''${_ns}/128" ;;
+    				*)   allow_props="''${allow_props} --property=IPAddressAllow=''${_ns}/32" ;;
+    			esac
+    			if [ "$quiet" -eq 0 ]; then
+    				printf 'sandboxed: auto-allowed resolver %s\n' "$_ns" >&2
+    			fi
+    		done < <(${pkgs.gnugrep}/bin/grep -E '^[[:space:]]*nameserver[[:space:]]+' /etc/resolv.conf 2>/dev/null \
+    			| ${pkgs.gawk}/bin/awk '{print $2}')
+    	fi
+
     	# Load persistent whitelist entries
     	if [ -f "$wl_file" ]; then
     		while IFS= read -r wl_entry; do
