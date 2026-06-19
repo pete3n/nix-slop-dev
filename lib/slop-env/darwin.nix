@@ -46,12 +46,6 @@ let
       # the jail shell starts cleanly without the closed-by-default deny
       # on the set-environment path.
       darwinJailExtras = with jail.combinators; [
-        # Distinctive prompt inside the jail so the user can tell at a
-        # glance which shell they're in. The outer dev shell prints
-        # bash's default `bash-5.3$`; the jailed bash prints
-        # `(jail) bash-5.3$` in red.
-        (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
-
         # nix-darwin's shell startup files at /etc/* are symlinks into
         # /nix/store (SYS_BASHRC=/etc/bashrc compiled into nixpkgs's
         # bashInteractive, plus zsh's /etc/zsh* siblings and
