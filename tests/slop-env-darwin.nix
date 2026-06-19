@@ -169,6 +169,28 @@ pkgs.runCommand "slop-env-darwin-launcher-tests" { } ''
     exit 1
   fi
 
+  # --- cwd canonicalisation (HITL 2026-06-19) ---
+  # The wrapper substitutes __JAIL_CWD__ in the SBPL with the resolved
+  # form of $PWD. macOS /tmp and /var are symlinks (/tmp → /private/tmp,
+  # /var → /private/var); sandbox-exec matches SBPL rules against the
+  # kernel-canonical (resolved) path. Plain `realpath` follows the
+  # symlinks; `realpath -s` strips them and emits the unresolved form,
+  # which the kernel then refuses to match — claude-code's bash child
+  # hits `shell-init: …getcwd…Operation not permitted` and Bun dies
+  # with `An unknown error occurred (Unexpected)`. Reproduced verbatim
+  # by `cd /tmp/test && nix run …#claude`. Anti-test pinning the bare
+  # `realpath` form.
+  if ${pkgs.gnugrep}/bin/grep -qE 'realpath[[:space:]]+-s[[:space:]]+"\$PWD"' "$PLACEHOLDER_WRAPPER"; then
+    echo "FAIL: wrapper uses 'realpath -s \"\$PWD\"' — strips symlinks, so /tmp/test won't match the kernel's /private/tmp/test view" >&2
+    ${pkgs.gnugrep}/bin/grep -nE 'realpath.*PWD' "$PLACEHOLDER_WRAPPER" >&2
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -qE 'realpath[[:space:]]+"\$PWD"' "$PLACEHOLDER_WRAPPER"; then
+    echo "FAIL: wrapper has no 'realpath \"\$PWD\"' — _jail_cwd resolution lost" >&2
+    ${pkgs.gnugrep}/bin/grep -nE 'realpath' "$PLACEHOLDER_WRAPPER" >&2
+    exit 1
+  fi
+
   echo "slop-env-darwin launcher tests passed"
   touch $out
 ''

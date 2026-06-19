@@ -399,13 +399,17 @@ pkgs.writeShellScriptBin binName # bash
 
     # Substitute the proxy port (and, in jail mode, the __JAIL_*
     # placeholders emitted by the Jail combinator library) into the SBPL
-    # template. `realpath -s` resolves any symlinks in $PWD to the kernel-
-    # canonical form sandbox-exec applies SBPL rules against (spike 10 F1
-    # — /tmp → /private/tmp etc.). $HOME is forwarded verbatim because
-    # macOS home directories never live under /tmp, /var, or /etc.
+    # template. Plain `realpath` (NOT `-s`) expands symlinks so $PWD
+    # canonicalises to the form sandbox-exec applies SBPL rules against
+    # — /tmp → /private/tmp, /var → /private/var. `-s` strips symlinks
+    # and emits the unresolved form, which the kernel then refuses to
+    # match: HITL surfaced 2026-06-19 as `shell-init: …getcwd…Operation
+    # not permitted` from a bash child of claude-code when launched with
+    # PWD under /tmp. $HOME is forwarded verbatim because macOS home
+    # directories never live under /tmp, /var, or /etc.
     profile_file="''${tmp_dir}/sandbox.sbpl"
     ${lib.optionalString (jail != null && jail ? jailData) ''
-      _jail_cwd="$(${pkgs.coreutils}/bin/realpath -s "$PWD")"
+      _jail_cwd="$(${pkgs.coreutils}/bin/realpath "$PWD")"
       # Linux-parity project-name resolution (slice-21 follow-up). The
       # caller (lib/slop-env/darwin.nix's claude/jail-shell launchers)
       # exports NIX_SLOP_DEV_PROJECT_NAME when in zero-touch app mode;

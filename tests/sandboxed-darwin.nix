@@ -77,14 +77,20 @@ let
     # tests/sandbox-profile.nix's testJailFragmentSplicedExactShape; this
     # test pins the same ordering at the render-helper layer.)
     # Slice 2+3: when the wrapper is built with a jail, its runtime sed
-    # pipeline must substitute __JAIL_CWD__ (with the live cwd via `realpath
-    # -s "$PWD"`) and __JAIL_HOME__ (with the live $HOME) in addition to the
-    # already-shipping __PROXYPORT__. Slices folded because the substitution
-    # code is shared (per ONBOARDING.md issue-11 TDD plan).
+    # pipeline must substitute __JAIL_CWD__ (with the live cwd via plain
+    # `realpath "$PWD"`) and __JAIL_HOME__ (with the live $HOME) in
+    # addition to the already-shipping __PROXYPORT__. Slices folded
+    # because the substitution code is shared (per ONBOARDING.md
+    # issue-11 TDD plan).
     #
     # Sed delimiter for the jail subs is `|` not `/` because paths contain
-    # `/`. cwd uses `realpath -s` so symlinks resolve to the canonical form
-    # the kernel applies SBPL rules against (spike 10 F1 — /tmp -> /private/tmp).
+    # `/`. cwd uses `realpath` (no `-s`) so symlinks resolve to the
+    # canonical form the kernel applies SBPL rules against — /tmp →
+    # /private/tmp, /var → /private/var. `-s` strips symlinks and emits
+    # the unresolved form, which the kernel then refuses to match: HITL
+    # surfaced 2026-06-19 as `shell-init: …getcwd…Operation not
+    # permitted` from claude-code's bash child when launched with PWD
+    # under /tmp.
     testJailWrapperSedSubstitutesAllPlaceholders = {
       expr = let
         fakeJail = {
