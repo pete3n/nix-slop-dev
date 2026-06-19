@@ -1,0 +1,8 @@
+;; Probe 02: bare categorical deny on top of allow default.
+;; If this denies all FS reads, then the Jail could use `(allow default)` +
+;; bare deny + selective subpath allows — simpler baseline than `(deny default)`.
+;; If silently ignored, we MUST use `(deny default)` as the baseline.
+(version 1)
+(allow default)
+(deny file-read*)
+(allow file-read* (subpath "/private/tmp/spike10/test1/allow"))

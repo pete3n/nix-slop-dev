@@ -1,0 +1,7 @@
+;; Probe 04: does (literal "/path/to/file") work for filesystem rules?
+;; Spike 07 found (literal ...) was a no-op under network-outbound; verify
+;; it's NOT a no-op for filesystem.
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/test1"))
+(allow file-read* (literal "/private/tmp/spike10/test1/allow/file.txt"))

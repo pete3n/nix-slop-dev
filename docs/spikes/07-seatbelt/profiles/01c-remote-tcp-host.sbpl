@@ -1,0 +1,5 @@
+;; Probe A variant: (remote tcp (remote-ip "..."))
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote tcp) (remote-ip "1.1.1.1"))

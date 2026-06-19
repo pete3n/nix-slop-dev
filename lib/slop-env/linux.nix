@@ -122,16 +122,23 @@ let
         ''
       );
 
+      # Slice 21 parity with Darwin's sandboxed-jailed-shell: Linux's
+      # jail-shell is also network-confined by the sandboxed wrapper. No
+      # per-invocation --allow flags — the persistent host whitelist
+      # (`sandboxed --wl-add`/`--wl-del`) is honoured so users who've
+      # curated allows already see them apply.
       jail-shell = pkgs.writeShellScriptBin "jail-shell" (
         if usesPlaceholder then ''
           set -euo pipefail
           ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
-          exec ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+          exec ${sandboxed}/bin/sandboxed -q -- \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             "$SLOP_LAUNCHER" "$@"
         '' else ''
           set -euo pipefail
           ${concretePreamble}
-          exec ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+          exec ${sandboxed}/bin/sandboxed -q -- \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             ${jailedShell}/bin/jailed-shell "$@"
         ''
       );
@@ -172,7 +179,7 @@ let
           		-e CLAUDE_CONFIG_DIR \
           		${lib.concatMapStrings (v: "-e ${v} \\\n\t\t") extraSandboxedEnvForwards}setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
           }
-          alias jail-shell="setpriv --ambient-caps=-sys_nice -- jailed-shell"
+          alias jail-shell="sandboxed -q -- setpriv --ambient-caps=-sys_nice -- jailed-shell"
         '';
     in
     {

@@ -1,0 +1,5 @@
+;; Probe 03: does (allow file-write* (subpath ...)) work the same way?
+(version 1)
+(allow default)
+(deny file-write* (subpath "/private/tmp/spike10/test1"))
+(allow file-write* (subpath "/private/tmp/spike10/test1/allow"))

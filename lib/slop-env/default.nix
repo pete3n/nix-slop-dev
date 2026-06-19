@@ -1,6 +1,6 @@
 { pkgs
 , sandboxed
-, prereqGuidance
+, prereqGuidance ? null
 , claude-pkg
 , jail
 }:
@@ -13,29 +13,40 @@
 #                  basePkgs?, projectPkgs?, projectEnv?, extraCombinators? }
 #     → pkgs.mkShell ...
 #   slop.mkBins  { same args }
-#     → { jailedClaude; jailedShell; sandboxedPackages; shellHook; }
+#     → { claude; jail-shell; jailedClaude; jailedShell;
+#         sandboxedPackages; shellHook; }
 #   slop.defaults
 #     → { basePkgs; claudeSettings; }
 #
-# Dispatch: currently Linux-only (the original NixOS path). Slice 20 adds
-# the non-NixOS-Linux variant; slice 21 adds Darwin. Each is a new per-OS
-# file plus one dispatch arm.
+# Dispatch: Linux (NixOS + non-NixOS-Linux via slice 20) versus Darwin
+# (slice 21). Each is a per-OS file plus one dispatch arm. The `jail`
+# arg differs per platform — Linux passes jail-nix's __functor (bwrap
+# combinators); Darwin passes nix-slop-dev's lib.jail return (Seatbelt
+# combinators, with explicit `.jail` constructor) — and each arm
+# consumes its own shape.
 
 let
   shared = import ./shared.nix { inherit pkgs; };
-  linux = import ./linux.nix { inherit pkgs sandboxed prereqGuidance claude-pkg jail shared; };
+  perOs =
+    if pkgs.stdenv.isDarwin then
+      import ./darwin.nix { inherit pkgs sandboxed claude-pkg jail shared; }
+    else
+      import ./linux.nix { inherit pkgs sandboxed prereqGuidance claude-pkg jail shared; };
 in
 {
-  inherit (linux) mkShell mkBins;
+  inherit (perOs) mkShell mkBins;
 
   defaults = {
     basePkgs = shared.defaultBasePkgs;
     claudeSettings = shared.defaultClaudeSettings;
   };
 
-  # Slice 19.1: re-expose the initialised jail-nix object. Templates that
+  # Slice 19.1: re-expose the initialised jail object. Templates that
   # need to construct extra combinators (e.g. nvim-dev's bind/try-fwd-env
   # entries via `extraCombinators`) can use `slop.jail.combinators.*`
-  # without taking jail-nix as a direct flake input themselves.
+  # without taking jail-nix as a direct flake input themselves. The
+  # value's shape differs by OS — Linux: jail-nix's __functor;
+  # Darwin: nix-slop-dev.lib.jail's `{ jail; combinators; ... }` —
+  # but the `.combinators` access path is portable.
   inherit jail;
 }

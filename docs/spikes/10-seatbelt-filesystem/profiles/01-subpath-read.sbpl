@@ -1,0 +1,19 @@
+;; Probe 01: does (allow file-read* (subpath ...)) grant transitive read,
+;; with (deny file-read* (subpath ...)) layered atop allow default?
+;;
+;; CRITICAL: subpath rules match RESOLVED paths (kernel canonicalization).
+;; /tmp -> /private/tmp on macOS, so a rule on "/tmp/..." silently matches
+;; nothing. Use the resolved form.
+;;
+;; Hypothesis: with resolved paths, last-match-wins:
+;;   - deny on /private/tmp/spike10/test1 catches everything under test1
+;;   - later allow on /private/tmp/spike10/test1/allow narrows back
+;;
+;; Expected:
+;;   cat /tmp/spike10/test1/allow/file.txt          -> success (allow wins)
+;;   cat /tmp/spike10/test1/allow/nested/deep.txt   -> success (transitive)
+;;   cat /tmp/spike10/test1/deny/file.txt           -> denied
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/test1"))
+(allow file-read* (subpath "/private/tmp/spike10/test1/allow"))

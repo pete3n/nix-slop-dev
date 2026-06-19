@@ -1,0 +1,5 @@
+;; Probe 05b: literal parens inside subpath strings
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/escape"))
+(allow file-read* (subpath "/private/tmp/spike10/escape/with(paren)"))

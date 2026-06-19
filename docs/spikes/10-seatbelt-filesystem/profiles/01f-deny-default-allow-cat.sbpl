@@ -1,0 +1,14 @@
+;; Probe 01f: deny default + allow everything needed for cat + deny test1.
+;; If this denies test1/deny but allows test1/allow, then the issue with
+;; the earlier probes is that deny is silently ignored under (allow default).
+(version 1)
+(deny default)
+(allow process*)
+(allow file-read-metadata)
+(allow file-read* (subpath "/usr"))
+(allow file-read* (subpath "/bin"))
+(allow file-read* (subpath "/System"))
+(allow file-read* (subpath "/Library"))
+(allow file-read* (subpath "/private/var/db/dyld"))
+(allow file-read* (subpath "/private/var/db/timezone"))
+(allow file-read* (subpath "/tmp/spike10/test1/allow"))

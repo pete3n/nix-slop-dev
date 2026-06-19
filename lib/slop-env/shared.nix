@@ -74,6 +74,11 @@ rec {
     , basePkgs
     , projectPkgs
     , projectEnv
+    , # Source path for the env interpreter the jail mounts at
+      # /usr/bin/env. Linux bwrap binds coreutils' env into the mount
+      # namespace; Darwin's /usr/bin is SIP-protected so the binding's
+      # source is the literal /usr/bin/env on the host (slice 21).
+      envSrc ? "${pkgs.coreutils}/bin/env"
     ,
     }:
     let
@@ -88,7 +93,7 @@ rec {
       mount-cwd
       no-new-session
 
-      (ro-bind "${pkgs.coreutils}/bin/env" "/usr/bin/env")
+      (ro-bind envSrc "/usr/bin/env")
 
       # Ephemeral config dir; project-fixed content written on top.
       (tmpfs (noescape cfgDir))
@@ -128,6 +133,13 @@ rec {
 
       (try-fwd-env "CLAUDE_CONFIG_DIR")
       (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
+      # Distinctive prompt inside the jail so the user can tell at a
+      # glance which shell they're in. The outer dev shell prints
+      # bash's default `bash-5.3$`; the jailed bash prints
+      # `(jail) bash-5.3$` in red. Cross-platform — slice-21 brings
+      # Darwin parity for this prompt to Linux, where the
+      # bwrap-spawned bash respects PS1 the same way Seatbelt's does.
+      (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
       (add-pkg-deps (basePkgs ++ projectPkgs))
     ]
     ++ lib.mapAttrsToList (key: value: c.set-env key value) projectEnv;

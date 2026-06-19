@@ -1,0 +1,5 @@
+;; Probe A variant: try (remote tcp "ip:port") instead of (remote ip ...)
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote tcp "1.1.1.1:80"))

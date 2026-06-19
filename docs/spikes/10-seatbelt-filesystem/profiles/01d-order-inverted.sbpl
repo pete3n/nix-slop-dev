@@ -1,0 +1,5 @@
+;; Probe 01d: does putting deny BEFORE allow default change behavior?
+;; (Tests whether SBPL filesystem rules are first-match instead of last-match.)
+(version 1)
+(deny file-read* (subpath "/tmp/spike10/test1"))
+(allow default)

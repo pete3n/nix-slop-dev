@@ -1,0 +1,5 @@
+;; Probe 01c: deny default + targeted allows. Does the deny default
+;; actually deny? cat must read /bin/cat, dyld caches, and the file —
+;; so this profile should fail to even exec.
+(version 1)
+(deny default)
