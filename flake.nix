@@ -33,6 +33,8 @@
         in
         {
           sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
+          setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
+          prereq-guidance = pkgs.callPackage ./packages/prereq-guidance/default.nix { };
           default = self.packages.${system}.sandboxed;
         }
       );
@@ -176,6 +178,53 @@
               ''
             else
               throw "extraSandboxedEnvForwards arg did not add an -e flag to the claude() sandboxed call";
+
+          # Slice 20 (#01): NixOS module evaluation — asserts user@
+          # sessions carry no cgroup Delegate after the dead BPF
+          # delegation was removed from modules/sandboxed/default.nix.
+          nixos-module = import ./tests/nixos-module.nix {
+            inherit nixpkgs pkgs system;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
+
+          # Slice 20 (#02): sandboxed wrapper --print-tools exercises the
+          # runtime NixOS detection (store paths vs bare names) without a
+          # real NixOS host.
+          wrapper-tool-resolution = import ./tests/wrapper-tool-resolution.nix {
+            inherit pkgs;
+            sandboxed = self.packages.${system}.sandboxed;
+          };
+
+          # Slice 20 (#03): setup-linux check-only mode uses a pure
+          # check-lib.sh evaluator driven by fixtures, so we cover every
+          # prerequisite branch without a real Ubuntu/Fedora host. The
+          # -app companion smoke-tests the wired-up nix run entry point.
+          setup-linux-checks = import ./tests/setup-linux-checks.nix {
+            inherit pkgs;
+          };
+
+          setup-linux-app = import ./tests/setup-linux-app.nix {
+            inherit pkgs;
+            setupLinux = self.packages.${system}.setup-linux;
+          };
+
+          # Slice 20 (#04): --apply mode's pure planning + sudoers /
+          # tool-path / auditd-install logic is fixture-driven via
+          # apply-lib.sh, so we cover every distro branch without
+          # mutating any host.
+          setup-linux-apply = import ./tests/setup-linux-apply.nix {
+            inherit pkgs;
+          };
+
+          # Slice 20 (#06 lib-layer rewrite): slop-prereq-guidance picks
+          # distro-aware advice (NixOS module options vs setup-linux) at
+          # runtime via the /etc/NIXOS marker. The marker path is
+          # overridable by argument so both branches are exercised in
+          # the build sandbox; the live auditd/sudo probes are HITL.
+          template-prereq-guidance = import ./tests/template-prereq-guidance.nix {
+            inherit pkgs;
+            prereqGuidance = self.packages.${system}.prereq-guidance;
+          };
         } // (
           if system == "x86_64-linux" then {
             template-claude-code-drv = import ./tests/template-claude-code-drv.nix {
@@ -197,6 +246,10 @@
       # root without touching the project's flake.nix. The lib-bundled
       # defaults (lib/slop-env/defaults/) feed mkBins's CLAUDE.md / rules
       # when no caller-supplied paths are given.
+      #
+      # Slice 20 (#03) adds setup-linux for non-NixOS hosts (diagnoses
+      # Sandbox/Jail prerequisites; #04 adds --apply mode behind the same
+      # entry point).
       apps = forAllSystems (
         system:
         let
@@ -211,6 +264,10 @@
           jail-shell = {
             type = "app";
             program = "${bins.jail-shell}/bin/jail-shell";
+          };
+          setup-linux = {
+            type = "app";
+            program = "${self.packages.${system}.setup-linux}/bin/setup-linux";
           };
         }
       );
@@ -227,6 +284,7 @@
           import ./lib/slop-env {
             inherit pkgs;
             sandboxed = self.packages.${system}.sandboxed;
+            prereqGuidance = self.packages.${system}.prereq-guidance;
             claude-pkg = llm-agents.packages.${system}.claude-code;
             jail = jail-nix.lib.init pkgs;
           };

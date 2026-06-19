@@ -11,6 +11,11 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     STAMP=""
     AUDIT_KEY=""
     UNIT=""
+    SYSTEMD_RUN=""
+    SYSTEMCTL=""
+    TAIL=""
+    AUDITCTL=""
+    AUSEARCH=""
     wl_dir="''${HOME}/${stateDir}"
     wl_file="''${wl_dir}/whitelist"
     wl_entry=""
@@ -21,9 +26,43 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     env_fwd=()
     watch_pid=""
 
+    # ADR-0002: resolve the five privileged tools that sudo invokes. On NixOS
+    # (marker present) use embedded Nix store paths kept in sync by the NixOS
+    # module. Elsewhere invoke bare names so sudo's secure_path resolves the
+    # host binaries — a store-pinned client could version-skew against the
+    # host systemd/audit daemons, and a store-path sudoers file would break on
+    # every flake update. The marker defaults to /etc/NIXOS; it is overridable
+    # by argument only for diagnostics/tests, never from the environment.
+    _resolve_privileged_tools() {
+    	if [ -f "''${1:-/etc/NIXOS}" ]; then
+    		SYSTEMD_RUN="${pkgs.systemd}/bin/systemd-run"
+    		SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
+    		TAIL="${pkgs.coreutils}/bin/tail"
+    		AUDITCTL="${pkgs.audit}/bin/auditctl"
+    		AUSEARCH="${pkgs.audit}/bin/ausearch"
+    	else
+    		SYSTEMD_RUN="systemd-run"
+    		SYSTEMCTL="systemctl"
+    		TAIL="tail"
+    		AUDITCTL="auditctl"
+    		AUSEARCH="ausearch"
+    	fi
+    }
+
+    _print_tools() {
+    	_resolve_privileged_tools "''${1:-}"
+    	printf '%s\n' \
+    		"systemd-run=''${SYSTEMD_RUN}" \
+    		"systemctl=''${SYSTEMCTL}" \
+    		"tail=''${TAIL}" \
+    		"auditctl=''${AUDITCTL}" \
+    		"ausearch=''${AUSEARCH}"
+    	exit 0
+    }
+
     _usage() {
     	printf >&2 '%s\n' \
-    	"Usage: sandboxed [-q] [-a <host>]... [-e <var>]... <command> [args...]" \
+    	"Usage: sandboxed [-q] [-a <host>]... [-e <var>]... [--] <command> [args...]" \
     	"       sandboxed --wl-add <hostname|ip|cidr> ..." \
     	"       sandboxed --wl-del <hostname|ip|cidr> ..." \
     	"       sandboxed --wl-list" \
@@ -39,7 +78,8 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     	"  --wl-add   Add to persistent whitelist (updates running sandboxes)" \
     	"  --wl-del   Remove from persistent whitelist (next session)" \
     	"  --wl-list  Show current whitelist" \
-    	"  --log      Search audit log for sandbox violations"
+    	"  --log      Search audit log for sandbox violations" \
+    	"  --print-tools  Show how privileged tools resolve on this host"
     	exit 1
     }
 
@@ -91,13 +131,13 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			while IFS= read -r _ip; do
     				[ -z "$_ip" ] && continue
     				case "$_ip" in
-    					*/*) sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}" ;;
-    					*:*) sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}/128" ;;
-    					*)   sudo ${pkgs.systemd}/bin/systemctl set-property "$_unit" IPAddressAllow="''${_ip}/32" ;;
+    					*/*) sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}" ;;
+    					*:*) sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}/128" ;;
+    					*)   sudo "$SYSTEMCTL" set-property "$_unit" IPAddressAllow="''${_ip}/32" ;;
     				esac
     			done <<< "$_ips"
     			_updated=$((_updated + 1))
-    		done < <(${pkgs.systemd}/bin/systemctl list-units \
+    		done < <("$SYSTEMCTL" list-units \
     			--type=service --state=running --no-legend \
     			| ${pkgs.gnugrep}/bin/grep 'sandbox-' \
     			| ${pkgs.gawk}/bin/awk '{print $1}')
@@ -139,7 +179,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     _sandbox_log() {
     	_key="''${1:-sandbox-}"
     	_since="''${2:-today}"
-    	sudo ${pkgs.audit}/bin/ausearch \
+    	sudo "$AUSEARCH" \
     		-k "$_key" \
     		--start "$_since" \
     		--raw \
@@ -147,10 +187,19 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     	| ${pkgs.gawk}/bin/awk '
     		function emit(    _dst, _port) {
     			if (_evt_exe == "") return
-    			if (_evt_exit != "-115" && _evt_exit != "-111") return
-    			if (_evt_exe !~ /^\/nix\/store\//) return
-    			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=local/) return
-    			if (_evt_key !~ /^sandbox-[^-]+-[0-9]{8}-[0-9]{6}$/) return
+    			# Skip events whose destination is in the allow list
+    			# (loopback + non-Internet socket families).
+    			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=(local|netlink|packet|unix)/) return
+    			# Skip successful connects with no SOCKADDR record (some
+    			# kernel paths log connect() without an accompanying
+    			# SOCKADDR; if the call succeeded it cannot have been
+    			# IPAddressDeny-blocked, so emitting would be a false
+    			# positive). Failed connects with no SOCKADDR still emit.
+    			if (_evt_saddr == "" && _evt_exit == "0") return
+    			# Key regex: sandbox-<binary>-<YYYYMMDD>-<HHMMSS>. The binary
+    			# can contain dashes (setup-linux, jailed-claude), so we use
+    			# .+ rather than [^-]+ for that segment.
+    			if (_evt_key !~ /^sandbox-.+-[0-9]{8}-[0-9]{6}$/) return
 
     			if (_evt_saddr != "") {
     				_dst  = _evt_saddr; gsub(/.*laddr=/, "", _dst);  gsub(/ .*/,      "", _dst)
@@ -183,6 +232,30 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     }
 
     _set_whitelist() {
+    	# Auto-allow nameservers from /etc/resolv.conf. Without this, the
+    	# sandboxed unit cannot do its own DNS lookups, and any name-based
+    	# work inside the sandbox fails with curl(6)/"Could not resolve host"
+    	# (or equivalent). On Ubuntu this is invisible because resolv.conf
+    	# points at 127.0.0.53 — already covered by the unconditional
+    	# IPAddressAllow=127.0.0.0/8 below. On Debian/Fedora resolv.conf
+    	# typically points at a LAN/ISP resolver that the cgroup IP filter
+    	# would otherwise drop. The host already trusts those resolvers
+    	# (the calling script used them when resolving --allow hostnames),
+    	# so propagating that trust into the unit is the right default.
+    	if [ -r /etc/resolv.conf ]; then
+    		while IFS= read -r _ns; do
+    			[ -z "$_ns" ] && continue
+    			case "$_ns" in
+    				*:*) allow_props="''${allow_props} --property=IPAddressAllow=''${_ns}/128" ;;
+    				*)   allow_props="''${allow_props} --property=IPAddressAllow=''${_ns}/32" ;;
+    			esac
+    			if [ "$quiet" -eq 0 ]; then
+    				printf 'sandboxed: auto-allowed resolver %s\n' "$_ns" >&2
+    			fi
+    		done < <(${pkgs.gnugrep}/bin/grep -E '^[[:space:]]*nameserver[[:space:]]+' /etc/resolv.conf 2>/dev/null \
+    			| ${pkgs.gawk}/bin/awk '{print $2}')
+    	fi
+
     	# Load persistent whitelist entries
     	if [ -f "$wl_file" ]; then
     		while IFS= read -r wl_entry; do
@@ -238,19 +311,26 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     }
 
     _cleanup() {
-    	sudo ${pkgs.audit}/bin/auditctl \
+    	sudo "$AUDITCTL" \
     		-d always,exit -F arch=b64 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
-    	sudo ${pkgs.audit}/bin/auditctl \
+    	sudo "$AUDITCTL" \
     		-d always,exit -F arch=b32 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	[ -n "''${watch_pid:-}" ] && kill "''${watch_pid}" 2>/dev/null || true
     }
 
+    _resolve_privileged_tools
+
     while [ $# -gt 0 ]; do
     	case "''${1}" in
+    	--print-tools)
+    		shift
+    		_print_tools "''${1:-}"
+    		;;
+
     	--wl-add)
     		shift
     		_wl_add "$@"
@@ -295,6 +375,13 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		env_fwd+=("''${2}")
     		shift 2
     		;;
+    	--)
+    		# Standard CLI separator. Without this, `--` would fall into
+    		# the *) branch below, leave the loop with $1=-- still set,
+    		# and crash `basename "$1"` with "missing operand".
+    		shift
+    		break
+    		;;
     	*)
     		break
     		;;
@@ -312,14 +399,26 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     _set_whitelist 
 
-    # Build watcher filter pattern: loopback + whitelisted IPs
-    allowed_re="laddr=127\\\\.|laddr=::1|saddr_fam=local"
+    # Build watcher filter pattern: loopback + non-Internet socket families
+    # (which IPAddressDeny cannot block, so the sandbox never actually denies
+    # them — alerting on them would be a pure false positive) + caller-allowed
+    # destination IPs. `local` is AF_UNIX; `netlink` is the kernel-routing
+    # query family curl/getaddrinfo use for interface discovery; `packet` is
+    # raw L2 sockets some tools open for similar reasons.
+    allowed_re="laddr=127\\\\.|laddr=::1|saddr_fam=(local|netlink|packet|unix)"
     for _prop in ''${allow_props}; do
     	case "$_prop" in
     		--property=IPAddressAllow=*)
     			_ip="''${_prop#--property=IPAddressAllow=}"
     			_ip="''${_ip%/*}"
-    			_escaped=$(printf '%s' "$_ip" | ${pkgs.gnused}/bin/sed 's/[.]/\\./g')
+    			# Two layers of escaping: sed emits `\\.` (two backslashes +
+    			# dot), so when awk parses _allowed_re as a string via -v it
+    			# converts `\\` → `\` and the final regex contains `\.` (a
+    			# literal-dot match). Without this, awk's string parser strips
+    			# the lone backslash from `\.` — emitting the warning
+    			# "escape sequence '\.' treated as plain '.'" and silently
+    			# widening every IP-octet match to a regex wildcard.
+    			_escaped=$(printf '%s' "$_ip" | ${pkgs.gnused}/bin/sed 's/[.]/\\\\./g')
     			allowed_re="''${allowed_re}|laddr=''${_escaped}"
     			;;
     	esac
@@ -336,17 +435,27 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     # Clean stale sandbox audit rules from previous sessions whose
     # cleanup traps did not fire
-    sudo ${pkgs.audit}/bin/auditctl -l 2>/dev/null \
+    sudo "$AUDITCTL" -l 2>/dev/null \
     	| ${pkgs.gnugrep}/bin/grep 'key=sandbox-' \
     	| while IFS= read -r _rule; do
-    		sudo ${pkgs.audit}/bin/auditctl -d "''${_rule#-a }" 2>/dev/null || true
+    		sudo "$AUDITCTL" -d "''${_rule#-a }" 2>/dev/null || true
     	done
 
-    sudo ${pkgs.audit}/bin/auditctl \
+    # We deliberately do NOT add `-F success=0` here. Kernels differ on
+    # whether IPAddressDeny fails the connect() syscall: Ubuntu's kernel
+    # returns an error and `success=no` matches; Fedora's lets connect()
+    # return 0 and silently drops the egress packets, so a `success=0`
+    # filter never matches and no events are logged at all. Logging all
+    # connects, scoped by `auid=4294967295 + uid=$USER + per-session
+    # key`, catches both kernel behaviours; the awk allowed_re filter
+    # below skips events whose destination is in the allow list, so the
+    # display layer only surfaces the connects the kernel actually
+    # blocked.
+    sudo "$AUDITCTL" \
     	-a always,exit -F arch=b64 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
-    sudo ${pkgs.audit}/bin/auditctl \
+    sudo "$AUDITCTL" \
     	-a always,exit -F arch=b32 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
@@ -360,21 +469,49 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     # flagging external blocked connects where no SOCKADDR arrives (items=0).
     watch_pid=""
     if [ "$quiet" -eq 0 ]; then
-    	sudo ${pkgs.coreutils}/bin/tail -f /var/log/audit/audit.log 2>/dev/null \
+    	sudo "$TAIL" -f /var/log/audit/audit.log 2>/dev/null \
     	| ${pkgs.gawk}/bin/awk \
     			-v _key="''${AUDIT_KEY}" \
     			-v _allowed_re="''${allowed_re}" \
     		'
-    		function emit(    _msg) {
+    		function emit(    _msg, _dst, _port) {
     			if (_evt_key != _key) return
-    			if (_evt_exit != "-115" && _evt_exit != "-111") return
-    			if (_evt_exe !~ /^\/nix\/store\//) return
+    			# Skip events whose destination is in the allow list (this
+    			# is the primary suppression path; saddr_fam=netlink etc.
+    			# are baked into _allowed_re as non-Internet families).
     			if (_evt_saddr != "" && _evt_saddr ~ _allowed_re) return
+    			# Skip successful connects with no SOCKADDR record. The
+    			# kernel logs a few connect() syscalls without auxiliary
+    			# SOCKADDR records (some io_uring paths, internal abstract
+    			# sockets, etc.). They cannot have been blocked by
+    			# IPAddressDeny because they succeeded, so emitting them
+    			# as VIOLATIONs is a guaranteed false positive. Failed
+    			# connects with no SOCKADDR still emit (Ubuntu kernels
+    			# block at connect() time and frequently lack SOCKADDR).
+    			if (_evt_saddr == "" && _evt_exit == "0") return
+
+    			# Extract destination IP and port for the banner so the user
+    			# can tell which connect attempt was flagged. When SOCKADDR
+    			# was not recorded for this event (some failed connects), we
+    			# fall back to unknown rather than omit the line. No
+    			# apostrophes in this block: the surrounding bash heredoc
+    			# uses single quotes to delimit the awk program, so any
+    			# apostrophe here would close that string and break the
+    			# script.
+    			if (_evt_saddr != "") {
+    				_dst  = _evt_saddr; gsub(/.*laddr=/, "", _dst);  gsub(/ .*/,      "", _dst)
+    				_port = _evt_saddr; gsub(/.*lport=/, "", _port); gsub(/[^0-9].*/, "", _port)
+    				if (_dst == "")  _dst  = "unknown"
+    				if (_port == "") _port = "?"
+    			} else {
+    				_dst = "unknown"; _port = "?"
+    			}
 
     			_msg = "\r\n\033[1;31m╔══ SANDBOX VIOLATION ══════════════════════════════════════╗\033[0m\r\n" \
     						"\033[1;31m║\033[0m  key:  " _key "\r\n" \
     						"\033[1;31m║\033[0m  time: " _evt_time "\r\n" \
     						"\033[1;31m║\033[0m  proc: " _evt_comm " (pid " _evt_pid ")\r\n" \
+    						"\033[1;31m║\033[0m  dest: " _dst ":" _port "\r\n" \
     						"\033[1;31m║\033[0m  exe:  " _evt_exe "\r\n" \
     						"\033[1;31m╚═══════════════════════════════════════════════════════════╝\033[0m\r\n"
     			printf "%s", _msg
@@ -411,7 +548,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     fi
 
     printf 'sandboxed: [%s] starting %s\n' "''${AUDIT_KEY}" "''${BINARY}" >&2
-    sudo ${pkgs.systemd}/bin/systemd-run \
+    sudo "$SYSTEMD_RUN" \
     	--pty \
     	--same-dir \
     	--wait \

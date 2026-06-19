@@ -1,0 +1,98 @@
+# Behavior tests for the template prerequisite-guidance script.
+#
+# slop-prereq-guidance is what the claude-code template shellHooks call to
+# report unmet Sandbox prerequisites. Its guidance is distro-aware: on NixOS
+# (marker present) it prints the security.sandboxed module advice unchanged; on
+# any other distro it points at setup-linux. The marker path is overridable by
+# argument so the branch can be exercised without a real NixOS host; the live
+# auditd/sudo probes (which fail in the build sandbox, making the guidance
+# print) are verified HITL.
+{
+  pkgs,
+  prereqGuidance,
+}:
+pkgs.runCommand "template-prereq-guidance-tests" { } ''
+  set -eu
+  fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+  touch nixos-marker
+  # The userns sysctl fixture is the same file format /proc exposes — a single
+  # line with "1" (restricted) or "0" (permitted). Build-sandbox /proc paths
+  # aren't readable in a deterministic way, so the script's second arg lets
+  # the test stand in its own files for both branches.
+  printf '1\n' > userns-restricted
+  printf '0\n' > userns-permitted
+  # AppArmor profile fixtures match the policy/profiles/ directory shape:
+  # one subdirectory per loaded profile, named profile-name plus a .NN
+  # generation suffix (e.g. nix-slop-dev-bwrap.193). We need two fixtures:
+  # one without and one with the nix-slop-dev-bwrap profile present, to
+  # drive both branches of the userns check.
+  mkdir apparmor-no-bwrap-profile
+  : > apparmor-no-bwrap-profile/unconfined.5
+  mkdir apparmor-bwrap-profile-loaded
+  : > apparmor-bwrap-profile-loaded/unconfined.5
+  : > apparmor-bwrap-profile-loaded/nix-slop-dev-bwrap.193
+
+  # Non-NixOS: guidance points at setup-linux, not the NixOS module.
+  nonnixos="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" 2>&1 || true)"
+  case "$nonnixos" in
+    *setup-linux*) ;;
+    *) fail "non-NixOS guidance should mention setup-linux; got:
+$nonnixos" ;;
+  esac
+  case "$nonnixos" in
+    *security.sandboxed*) fail "non-NixOS guidance should not mention the NixOS module; got:
+$nonnixos" ;;
+    *) ;;
+  esac
+
+  # NixOS: guidance is the unchanged module advice, not setup-linux.
+  nixos="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/nixos-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" 2>&1 || true)"
+  case "$nixos" in
+    *security.sandboxed*) ;;
+    *) fail "NixOS guidance should mention the security.sandboxed module; got:
+$nixos" ;;
+  esac
+  case "$nixos" in
+    *setup-linux*) fail "NixOS guidance should not mention setup-linux; got:
+$nixos" ;;
+    *) ;;
+  esac
+
+  # Non-NixOS + AppArmor userns restriction on + profile NOT loaded: the
+  # third prereq fires, naming the user-namespace issue and the docs section
+  # that walks through the manual profile install.
+  userns_restricted="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-restricted" "$PWD/apparmor-no-bwrap-profile" 2>&1 || true)"
+  case "$userns_restricted" in
+    *"user namespaces"*) ;;
+    *) fail "non-NixOS + restricted userns + no profile should mention 'user namespaces'; got:
+$userns_restricted" ;;
+  esac
+  case "$userns_restricted" in
+    *"non-nixos-linux.md"*) ;;
+    *) fail "non-NixOS + restricted userns + no profile should reference the manual-steps docs; got:
+$userns_restricted" ;;
+  esac
+
+  # Non-NixOS + sysctl still restricted + AppArmor profile loaded: this is the
+  # post-apply-mode state. The bwrap profile grants userns to bwrap only, so
+  # the check must NOT fire — even with the sysctl still at 1.
+  userns_profile_loaded="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-restricted" "$PWD/apparmor-bwrap-profile-loaded" 2>&1 || true)"
+  case "$userns_profile_loaded" in
+    *"user namespaces"*) fail "AppArmor profile loaded should silence userns warning; got:
+$userns_profile_loaded" ;;
+    *) ;;
+  esac
+
+  # NixOS marker takes precedence — even with a restricted sysctl file
+  # present, the NixOS branch never prints the userns warning (the knob
+  # isn't a typical NixOS concern).
+  userns_on_nixos="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/nixos-marker" "$PWD/userns-restricted" "$PWD/apparmor-no-bwrap-profile" 2>&1 || true)"
+  case "$userns_on_nixos" in
+    *"user namespaces"*) fail "NixOS branch should not surface the userns guidance; got:
+$userns_on_nixos" ;;
+    *) ;;
+  esac
+
+  touch "$out"
+''
