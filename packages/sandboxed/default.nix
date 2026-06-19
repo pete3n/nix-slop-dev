@@ -192,7 +192,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			# Everything reaching emit() is a real sandbox-scoped failure,
     			# so we no longer second-guess by exit code or by exe path
     			# (host binaries like /usr/bin/curl are legitimate targets).
-    			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=local/) return
+    			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=(local|netlink|packet|unix)/) return
     			# Key regex: sandbox-<binary>-<YYYYMMDD>-<HHMMSS>. The binary
     			# can contain dashes (setup-linux, jailed-claude), so we use
     			# .+ rather than [^-]+ for that segment.
@@ -396,8 +396,13 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     _set_whitelist 
 
-    # Build watcher filter pattern: loopback + whitelisted IPs
-    allowed_re="laddr=127\\\\.|laddr=::1|saddr_fam=local"
+    # Build watcher filter pattern: loopback + non-Internet socket families
+    # (which IPAddressDeny cannot block, so the sandbox never actually denies
+    # them — alerting on them would be a pure false positive) + caller-allowed
+    # destination IPs. `local` is AF_UNIX; `netlink` is the kernel-routing
+    # query family curl/getaddrinfo use for interface discovery; `packet` is
+    # raw L2 sockets some tools open for similar reasons.
+    allowed_re="laddr=127\\\\.|laddr=::1|saddr_fam=(local|netlink|packet|unix)"
     for _prop in ''${allow_props}; do
     	case "$_prop" in
     		--property=IPAddressAllow=*)
