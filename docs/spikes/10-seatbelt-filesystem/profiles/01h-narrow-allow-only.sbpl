@@ -1,0 +1,22 @@
+;; Probe 01h: deny default + cat prelude, narrow allow only for test1/allow.
+;; No deny rules atop. Tests whether (allow file-read* (subpath ...)) is
+;; transitive (nested children covered) and properly restrictive (no leak
+;; to siblings under the same parent).
+(version 1)
+(deny default)
+(allow process*)
+(allow sysctl-read)
+(allow mach-lookup)
+(allow ipc-posix-shm*)
+(allow signal)
+;; Reads needed for cat to load
+(allow file-read* (subpath "/usr/lib"))
+(allow file-read* (subpath "/System/Library"))
+(allow file-read* (subpath "/usr/share/icu"))
+(allow file-read* (subpath "/private/var/db/dyld"))
+(allow file-read* (subpath "/private/var/db/timezone"))
+(allow file-read-metadata (subpath "/"))
+(allow file-read-metadata (literal "/"))
+(allow file-read* (literal "/"))
+;; The actual subject: ONLY the allow subpath (resolved path — /tmp is a symlink)
+(allow file-read* (subpath "/private/tmp/spike10/test1/allow"))

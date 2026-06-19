@@ -1,0 +1,6 @@
+;; Probe 05e: unescaped quote inside subpath string — expect parser error.
+;; Confirms the combinator MUST escape callers' paths eagerly; raw splicing
+;; would either parse-fail or smuggle in an early string terminator.
+(version 1)
+(allow default)
+(allow file-read* (subpath "/private/tmp/spike10/escape/with"quote"))

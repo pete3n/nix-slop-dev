@@ -1,0 +1,6 @@
+;; Probe 05c: escaped quotes inside subpath strings — SBPL TinyScheme
+;; lineage suggests \" is the escape sequence.
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/escape"))
+(allow file-read* (subpath "/private/tmp/spike10/escape/with\"quote\""))

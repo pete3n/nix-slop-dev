@@ -1,0 +1,5 @@
+;; Probe 05d: literal backslash in path. Tests whether \\ is the escape.
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/escape"))
+(allow file-read* (subpath "/private/tmp/spike10/escape/with\\back"))

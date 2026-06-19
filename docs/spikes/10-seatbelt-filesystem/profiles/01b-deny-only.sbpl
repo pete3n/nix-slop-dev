@@ -1,0 +1,7 @@
+;; Probe 01b: bare deny on top of allow default — does the deny fire at all?
+;;
+;; Expected if last-match-wins for filesystem mirrors network:
+;;   cat /tmp/spike10/test1/deny/file.txt -> denied
+(version 1)
+(allow default)
+(deny file-read* (subpath "/tmp/spike10/test1"))

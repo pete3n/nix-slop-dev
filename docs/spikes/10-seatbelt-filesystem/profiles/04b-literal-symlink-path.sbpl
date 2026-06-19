@@ -1,0 +1,6 @@
+;; Probe 04b: does (literal "/tmp/...") work, or must we use the resolved
+;; /private/tmp form just as we must with (subpath ...)?
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/spike10/test1"))
+(allow file-read* (literal "/tmp/spike10/test1/allow/file.txt"))
