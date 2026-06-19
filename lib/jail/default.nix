@@ -58,6 +58,7 @@ let
     env = { };
     envForward = [ ];
     binPaths = [ ];
+    hostResolve = [ ];
   };
 
   mergeSlices = left: right: {
@@ -67,6 +68,7 @@ let
     env = left.env // right.env;
     envForward = left.envForward ++ right.envForward;
     binPaths = left.binPaths ++ right.binPaths;
+    hostResolve = left.hostResolve ++ right.hostResolve;
   };
 
   # Rewrites a path to its macOS kernel-canonical form by replacing the
@@ -404,6 +406,52 @@ let
     try-fwd-env = name:
       emptySlice // { envForward = [ name ]; };
 
+    # Grants read access to a host path whose canonical target is only
+    # knowable at wrapper runtime — the canonical case is an /etc symlink
+    # managed by nix-darwin that points into /nix/store. Spike 10 F1
+    # dictates that SBPL rules match the kernel-canonical (fully-resolved)
+    # path, so a static `(literal "/private/etc/bashrc")` allow misses the
+    # store target and bash prints `Operation not permitted` on every
+    # interactive launch. host-resolve emits a placeholder allow at
+    # Nix-eval time and propagates the original path through `hostResolve`
+    # so the darwin wrapper can `readlink -f` it at preflight and sed-
+    # substitute the placeholder before sandbox-exec loads the profile.
+    #
+    # Key derivation is deterministic: uppercase the path, replace every
+    # non-alnum char with `_`, strip the leading `_` from the inevitable
+    # leading-slash. `/etc/bashrc` → `ETC_BASHRC`, `/etc/foo.conf` →
+    # `ETC_FOO_CONF`. Chosen over a hash so the rendered SBPL stays
+    # human-reviewable — the placeholder telegraphs which host path it
+    # belongs to.
+    #
+    # On non-nix-darwin macOS the named paths are already regular files
+    # covered by the prelude; the wrapper's `readlink -f` returns the
+    # path unchanged and the rule is a redundant (but harmless) allow.
+    # When the host path doesn't exist at all, the wrapper substitutes
+    # `/__jail_host_resolve_no_match_<key>__` (a sentinel that cannot
+    # match any real path) — emphatically NOT the empty string, which
+    # would render as `(subpath "")` and match the entire filesystem.
+    #
+    # Linux templates may list this combinator unconditionally: lib/jail
+    # emits the slice on every platform, but only the darwin wrapper
+    # consumes `hostResolve`. The bare allow on the unsubstituted
+    # placeholder string on Linux is a no-op (bwrap doesn't apply SBPL).
+    host-resolve = path:
+      let
+        upper = lib.toUpper path;
+        sanitisedRaw = builtins.replaceStrings
+          [ "/" "." "-" " " ":" ]
+          [ "_" "_" "_" "_" "_" ]
+          upper;
+        key = lib.removePrefix "_" sanitisedRaw;
+        placeholder = "__JAIL_HOST_RESOLVE_${key}__";
+      in emptySlice // {
+        sbpl = ''
+          (allow file-read* (subpath "${placeholder}"))
+        '';
+        hostResolve = [ { inherit placeholder path; } ];
+      };
+
     # Adds the closure of `pkgList` to the jail's read-allow set and
     # prepends each pkg's bin/ directory to PATH. The closure (vs the
     # top-level pkgs only) is required because dyld must be able to
@@ -485,7 +533,7 @@ let
       drv // {
         jailData = {
           sbpl = sbplFragment;
-          inherit (merged) preflight cleanup env envForward binPaths;
+          inherit (merged) preflight cleanup env envForward binPaths hostResolve;
           mainBin = lib.getExe pkg;
         };
       };

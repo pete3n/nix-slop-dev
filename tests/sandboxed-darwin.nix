@@ -483,6 +483,184 @@ let
       in proxyIdx < jailIdx;
       expected = true;
     };
+
+    # Issue 14: when the jail carries hostResolve entries, the wrapper's
+    # sed pipeline must add one `-e "s|<placeholder>|${_jail_hr_<key>}|g"`
+    # per entry. The bash variable name is derived from the placeholder by
+    # lowercasing (and stripping the `__JAIL_HOST_RESOLVE_` prefix and
+    # trailing `__`), which mirrors the convention slice 5's resolution
+    # block uses to declare those variables. Sed delimiter is `|` (paths
+    # contain `/`) — matches the existing __JAIL_CWD__ / __JAIL_HOME__
+    # substitutions.
+    testJailWrapperSedSubstitutesHostResolvePlaceholders = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [
+              { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
+              { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
+            ];
+            mainBin = "/nix/store/fake/bin/host-resolve-sed";
+          };
+        };
+        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+      in {
+        hasBashrcSub = lib.hasInfix
+          ''-e "s|__JAIL_HOST_RESOLVE_ETC_BASHRC__|''${_jail_hr_etc_bashrc}|g"''
+          pipeline;
+        hasZshrcSub = lib.hasInfix
+          ''-e "s|__JAIL_HOST_RESOLVE_ETC_ZSHRC__|''${_jail_hr_etc_zshrc}|g"''
+          pipeline;
+        # Existing subs must still appear — host-resolve is additive.
+        hasProxyPortSub = lib.hasInfix
+          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+        hasJailCwdSub = lib.hasInfix
+          ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
+      };
+      expected = {
+        hasBashrcSub = true;
+        hasZshrcSub = true;
+        hasProxyPortSub = true;
+        hasJailCwdSub = true;
+      };
+    };
+
+    # Issue 14: an empty hostResolve list (jail without host-resolve
+    # combinators) must NOT add any sed args — the wrapper's pipeline
+    # stays at the existing proxy-port + cwd + home triple. Anti-test
+    # against a fold that would emit an empty `-e` argument.
+    testJailWrapperSedNoHostResolveSubsWhenListEmpty = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [ ];
+            mainBin = "/nix/store/fake/bin/host-resolve-empty-sed";
+          };
+        };
+        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+      in {
+        hasNoHostResolveSub = !(lib.hasInfix "__JAIL_HOST_RESOLVE_" pipeline);
+        hasJailHomeSub = lib.hasInfix
+          ''-e "s|__JAIL_HOME__|''${HOME}|g"'' pipeline;
+      };
+      expected = {
+        hasNoHostResolveSub = true;
+        hasJailHomeSub = true;
+      };
+    };
+
+    # Issue 14: the resolution block runs BEFORE the sed pipeline (it
+    # populates the bash variables sed references). For each hostResolve
+    # entry, one line `_jail_hr_<key>="$(<readlink-bin> -f '<path>' || echo
+    # <sentinel>)"`. Sentinel `/__jail_host_resolve_no_match_<key>__`
+    # cannot match any real path; emphatically NOT `""` (which would
+    # render as `(subpath "")` and match the entire filesystem). The
+    # `readlinkBin` parameter lets the wrapper inject
+    # `${pkgs.coreutils}/bin/readlink` while the render layer stays free
+    # of pkgs.
+    testHostResolveResolutionBlockEmitsReadlinkAndSentinelPerEntry = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [
+              { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
+              { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
+            ];
+            mainBin = "/nix/store/fake/bin/host-resolve-block";
+          };
+        };
+      in render.mkHostResolveResolutionBlock {
+        jail = fakeJail;
+        readlinkBin = "/fake/readlink";
+      };
+      expected = ''
+        _jail_hr_etc_bashrc="$(/fake/readlink -f '/etc/bashrc' 2>/dev/null || echo '/__jail_host_resolve_no_match_etc_bashrc__')"
+        _jail_hr_etc_zshrc="$(/fake/readlink -f '/etc/zshrc' 2>/dev/null || echo '/__jail_host_resolve_no_match_etc_zshrc__')"
+      '';
+    };
+
+    # Issue 14: no jail → empty resolution block. Pins the network-only
+    # contract: the wrapper script stays byte-for-byte identical to its
+    # pre-issue-14 shape in that mode (no dead bash, no stray newlines).
+    testHostResolveResolutionBlockEmptyWhenNoJail = {
+      expr = render.mkHostResolveResolutionBlock {
+        readlinkBin = "/fake/readlink";
+      };
+      expected = "";
+    };
+
+    # Issue 14: jail with an empty hostResolve list (no host-resolve
+    # combinators) also emits empty text — no trailing newline. Pins the
+    # same no-trailing-newline contract mkPreflightBlock / mkCleanupBlock
+    # have. Anti-test against a `concatStringsSep "\n"` impl that leaves a
+    # blank line in the rendered wrapper.
+    testHostResolveResolutionBlockEmptyWhenListEmpty = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [ ];
+            mainBin = "/nix/store/fake/bin/host-resolve-empty-block";
+          };
+        };
+      in render.mkHostResolveResolutionBlock {
+        jail = fakeJail;
+        readlinkBin = "/fake/readlink";
+      };
+      expected = "";
+    };
+
+    # Slice 0 (issue 12 prerequisite): the wrapper's bin name must be
+    # configurable so per-jail builds can coexist on PATH. Without this,
+    # `pkgs.callPackage <…>/packages/sandboxed-darwin { jail = jailedClaude; }`
+    # and a second callPackage with `jail = jailedShell` would both produce
+    # `$out/bin/sandboxed`, clashing when both end up in a devShell's PATH.
+    # The default preserves the existing network-only contract: `sandboxed`.
+    testBinNameDefaultsToSandboxed = {
+      expr = (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
+        sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
+          mkdir -p $out/bin; touch $out/bin/sandbox-proxy
+        '';
+      }).meta.mainProgram or "MISSING";
+      expected = "sandboxed";
+    };
+
+    # Slice 0: with a custom binName, the wrapper's derivation `meta.mainProgram`
+    # (and the bin under $out/bin/) reflects it. Templates pass
+    # `binName = "sandboxed-jailed-claude"` (and `…-jailed-shell`) so the two
+    # per-jail wrappers live side-by-side on PATH.
+    testBinNameAcceptsCustomValue = {
+      expr = (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
+        sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
+          mkdir -p $out/bin; touch $out/bin/sandbox-proxy
+        '';
+        binName = "sandboxed-jailed-claude";
+      }).meta.mainProgram or "MISSING";
+      expected = "sandboxed-jailed-claude";
+    };
   };
 
   failures = lib.runTests tests;

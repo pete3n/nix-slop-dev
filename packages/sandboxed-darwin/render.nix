@@ -15,6 +15,18 @@
 { lib }:
 let
   profile = import ../../modules/macos-sandbox/profile.nix { inherit lib; };
+
+  # Derives the bash variable name (and matching sentinel suffix) for a
+  # hostResolve entry from its placeholder. Strips the
+  # `__JAIL_HOST_RESOLVE_` prefix and trailing `__`, then lowercases —
+  # `__JAIL_HOST_RESOLVE_ETC_BASHRC__` → `etc_bashrc`. Used by both the
+  # sed-pipeline emission and the resolution block so the variable
+  # names line up across the two render sites.
+  hostResolveKey = entry:
+    let
+      mid = lib.removeSuffix "__"
+        (lib.removePrefix "__JAIL_HOST_RESOLVE_" entry.placeholder);
+    in lib.toLower mid;
 in
 {
   combinedSbplTemplate = { jail ? null }:
@@ -126,12 +138,57 @@ in
     then ''"${jail.jailData.mainBin}" "$@"''
     else ''"$@"'';
 
+  # Emits the bash block that resolves each hostResolve entry's path
+  # before the SBPL sed pipeline runs. One line per entry of the form:
+  #
+  #   _jail_hr_<key>="$(<readlinkBin> -f '<path>' 2>/dev/null
+  #                     || echo '/__jail_host_resolve_no_match_<key>__')"
+  #
+  # The bash variable name (`_jail_hr_<key>`) matches the one
+  # `mkProfileSedPipeline` references in its `-e "s|<placeholder>|${var}|g"`
+  # arg, so the sed substitution reads exactly the value this block
+  # computed. `readlinkBin` is injected by default.nix as
+  # `${pkgs.coreutils}/bin/readlink` — render.nix stays pkgs-free.
+  #
+  # The sentinel `/__jail_host_resolve_no_match_<key>__` is what gets
+  # substituted into SBPL when the host path doesn't exist. It cannot
+  # match any real file because no path on the host has that exact
+  # name, so the rule degenerates to a no-op (the user's intent: "allow
+  # this if it exists, otherwise nothing"). Emphatically NOT the empty
+  # string — `(subpath "")` matches the entire filesystem.
+  #
+  # `readlink -f` (vs `realpath`) is the issue's explicit choice: the
+  # ADR-0004 prelude is already calibrated against the resolved targets
+  # of /etc/* symlinks on nix-darwin, and `readlink -f` is what nix-darwin
+  # itself documents for that resolution. On stock macOS (no symlink) it
+  # returns the path unchanged — the allow becomes redundant with the
+  # prelude literal but is harmless.
+  mkHostResolveResolutionBlock = { jail ? null, readlinkBin }:
+    let
+      hasEntries = jail != null
+        && jail ? jailData
+        && (jail.jailData.hostResolve or [ ]) != [ ];
+      mkLine = entry:
+        let key = hostResolveKey entry;
+        in ''_jail_hr_${key}="$(${readlinkBin} -f '${entry.path}' 2>/dev/null || echo '/__jail_host_resolve_no_match_${key}__')"'';
+    in
+      if hasEntries
+      then lib.concatMapStrings (e: mkLine e + "\n") jail.jailData.hostResolve
+      else "";
+
   mkProfileSedPipeline = { jail ? null }:
     let
       proxyPortSub = ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'';
-      jailSubs = lib.optionals (jail != null && jail ? jailData) [
+      hasJail = jail != null && jail ? jailData;
+      staticJailSubs = lib.optionals hasJail [
         ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"''
         ''-e "s|__JAIL_HOME__|''${HOME}|g"''
       ];
-    in lib.concatStringsSep " " ([ proxyPortSub ] ++ jailSubs);
+      hostResolveSubs = lib.optionals hasJail
+        (map (entry:
+          let key = hostResolveKey entry;
+          in ''-e "s|${entry.placeholder}|''${_jail_hr_${key}}|g"'')
+          (jail.jailData.hostResolve or [ ]));
+    in lib.concatStringsSep " "
+      ([ proxyPortSub ] ++ staticJailSubs ++ hostResolveSubs);
 }

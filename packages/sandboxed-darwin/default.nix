@@ -406,7 +406,10 @@ pkgs.writeShellScriptBin binName # bash
     profile_file="''${tmp_dir}/sandbox.sbpl"
     ${lib.optionalString (jail != null && jail ? jailData) ''
       _jail_cwd="$(${pkgs.coreutils}/bin/realpath -s "$PWD")"
-    ''}${pkgs.gnused}/bin/sed ${render.mkProfileSedPipeline { inherit jail; }} \
+    ''}${render.mkHostResolveResolutionBlock {
+      inherit jail;
+      readlinkBin = "${pkgs.coreutils}/bin/readlink";
+    }}${pkgs.gnused}/bin/sed ${render.mkProfileSedPipeline { inherit jail; }} \
     	"$sbpl_template" > "$profile_file"
 
     if [ "$quiet" -eq 0 ]; then

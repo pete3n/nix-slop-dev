@@ -14,7 +14,7 @@
 let
   jailLib = import ../lib/jail { inherit lib pkgs; };
   inherit (jailLib) emptySlice mergeSlices combinators prelude jail;
-  inherit (combinators) set-env time-zone network no-new-session ro-bind rw-bind mount-cwd noescape tmpfs write-text try-readwrite try-fwd-env add-pkg-deps;
+  inherit (combinators) set-env time-zone network no-new-session ro-bind rw-bind mount-cwd noescape tmpfs write-text try-readwrite try-fwd-env add-pkg-deps host-resolve;
 
   tests = {
     # Slice 1 tracer: set-env is the simplest combinator. No SBPL emission
@@ -777,6 +777,130 @@ let
       in {
         isDerivation = true;
         mainBin = "${leafPkg}/bin/leaf-binary";
+      };
+    };
+
+    # Issue 14 tracer: emptySlice carries a `hostResolve` field — the
+    # combinator-side propagation slot for host-resolve entries. Each entry
+    # is `{ placeholder; path; }`: SBPL holds the placeholder verbatim and
+    # the darwin wrapper resolves `path` via `readlink -f` at preflight,
+    # sed-substituting the placeholder before sandbox-exec loads the
+    # profile. The slot is `[]` by default so combinators that don't touch
+    # host-resolve contribute nothing. (Mirrors the empty-list defaults of
+    # preflight/cleanup/envForward/binPaths.)
+    testEmptySliceHasHostResolveField = {
+      expr = emptySlice.hostResolve;
+      expected = [ ];
+    };
+
+    # Issue 14: mergeSlices concatenates hostResolve entries from both
+    # sides in left-then-right order. The merge fold inside the `jail`
+    # constructor depends on this — two host-resolve combinators in the
+    # caller's list must produce two distinct entries in the merged slice.
+    # Anti-test for a `//` impl that would silently overwrite left's list
+    # with right's.
+    testMergeSlicesConcatenatesHostResolve = {
+      expr = (mergeSlices
+        (emptySlice // { hostResolve = [ { placeholder = "A"; path = "/a"; } ]; })
+        (emptySlice // { hostResolve = [ { placeholder = "B"; path = "/b"; } ]; })
+      ).hostResolve;
+      expected = [
+        { placeholder = "A"; path = "/a"; }
+        { placeholder = "B"; path = "/b"; }
+      ];
+    };
+
+    # Issue 14 tracer: host-resolve takes a host path whose canonical
+    # target is only knowable at wrapper runtime (typical case: a symlink
+    # under /etc managed by nix-darwin that points into /nix/store). The
+    # SBPL allow names a placeholder `__JAIL_HOST_RESOLVE_<KEY>__` that
+    # the darwin wrapper sed-substitutes with `readlink -f <path>` at
+    # preflight time; the hostResolve entry carries both the placeholder
+    # and the original path so the wrapper can do the resolution. Key is
+    # derived from the path by uppercasing and replacing non-alnum chars
+    # with `_`, with any leading `_` stripped — predictable and reviewable
+    # in the rendered profile (vs. a hash).
+    testHostResolveEmitsPlaceholderAndEntry = {
+      expr = let slice = host-resolve "/etc/bashrc"; in {
+        sbpl = slice.sbpl;
+        hostResolve = slice.hostResolve;
+      };
+      expected = {
+        sbpl = ''
+          (allow file-read* (subpath "__JAIL_HOST_RESOLVE_ETC_BASHRC__"))
+        '';
+        hostResolve = [ {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
+          path = "/etc/bashrc";
+        } ];
+      };
+    };
+
+    # Issue 14: anti-test against bleeding into other slice fields. The
+    # combinator must touch ONLY sbpl + hostResolve — no preflight (the
+    # readlink happens in the wrapper's pre-sed phase, not the lib/jail
+    # preflight list), no cleanup (read-only allow), no env/binPaths.
+    # A naive impl that grafted a `readlink -f` onto preflight would
+    # silently fire on Linux templates too (lib/jail emits the slice
+    # unconditionally; the issue's cross-platform constraint demands the
+    # only consumer be the darwin wrapper).
+    testHostResolveLeavesOtherSliceFieldsEmpty = {
+      expr = let slice = host-resolve "/etc/bashrc"; in {
+        inherit (slice) preflight cleanup env envForward binPaths;
+      };
+      expected = {
+        preflight = [ ];
+        cleanup = [ ];
+        env = { };
+        envForward = [ ];
+        binPaths = [ ];
+      };
+    };
+
+    # Issue 14: deeper paths and non-alnum chars normalise to underscores.
+    # Anti-test for a regex that only handles `/` or that drops `.` and
+    # `-` silently, producing colliding placeholders for distinct paths.
+    # Issue 14: the jail constructor must propagate the merged hostResolve
+    # list into jailData so the darwin wrapper (slice 11) can iterate it
+    # to emit per-entry sed substitutions. Multiple host-resolve calls in
+    # the combinator list must appear in list order — the wrapper builds
+    # its sed pipeline by iterating this list, and stable order keeps
+    # rendered scripts diff-reviewable.
+    testJailPropagatesHostResolveThroughJailData = {
+      expr = let
+        leafPkg = pkgs.runCommand "jail-test-host-resolve-pkg" { } ''
+          mkdir -p $out/bin; : > $out/bin/jail-test-host-resolve
+        '';
+        result = jail "jail-test-host-resolve" leafPkg [
+          (host-resolve "/etc/bashrc")
+          (host-resolve "/etc/zshrc")
+        ];
+      in result.jailData.hostResolve;
+      expected = [
+        { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
+        { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
+      ];
+    };
+
+    testHostResolveKeyDerivationHandlesNonAlnumChars = {
+      expr = {
+        deep = (host-resolve "/etc/zsh/zshrc").hostResolve;
+        dotted = (host-resolve "/etc/foo.conf").hostResolve;
+        dashed = (host-resolve "/etc/foo-bar").hostResolve;
+      };
+      expected = {
+        deep = [ {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSH_ZSHRC__";
+          path = "/etc/zsh/zshrc";
+        } ];
+        dotted = [ {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_CONF__";
+          path = "/etc/foo.conf";
+        } ];
+        dashed = [ {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_BAR__";
+          path = "/etc/foo-bar";
+        } ];
       };
     };
 

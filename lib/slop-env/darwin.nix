@@ -51,6 +51,35 @@ let
         # bash's default `bash-5.3$`; the jailed bash prints
         # `(jail) bash-5.3$` in red.
         (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
+
+        # nix-darwin's shell startup files at /etc/* are symlinks into
+        # /nix/store (SYS_BASHRC=/etc/bashrc compiled into nixpkgs's
+        # bashInteractive, plus zsh's /etc/zsh* siblings and
+        # /etc/terminfo). Spike 10 F1 dictates that SBPL rules match
+        # the kernel-canonical (fully-resolved) path; a static literal
+        # allow on /private/etc/bashrc misses the resolved store
+        # target on nix-darwin and bash prints `Operation not
+        # permitted` at every interactive launch. host-resolve emits a
+        # placeholder allow that the darwin wrapper sed-substitutes
+        # with `readlink -f` at preflight. On stock macOS (no symlink)
+        # the substitution returns the path unchanged and the prelude
+        # already covers the literal, so this is a no-op.
+        (host-resolve "/etc/bashrc")
+        (host-resolve "/etc/zshrc")
+        (host-resolve "/etc/zprofile")
+        (host-resolve "/etc/zshenv")
+        (host-resolve "/etc/terminfo")
+
+        # nix-darwin's /etc/bashrc and /etc/zshenv source a hard-coded
+        # /nix/store/.../set-environment path baked at activation time
+        # to inject the host's nix-darwin system PATH into interactive
+        # shells. The jail intentionally builds its own env via
+        # add-pkg-deps + set-env, so sourcing the host's environment
+        # would leak nix-darwin paths into the sandbox AND the file's
+        # specific store hash isn't in the jail's allow set. Both
+        # files honour __NIX_DARWIN_SET_ENVIRONMENT_DONE as a skip
+        # switch — set it so the jail shell starts cleanly without
+        # the closed-by-default deny on the set-environment path.
         (set-env "__NIX_DARWIN_SET_ENVIRONMENT_DONE" "1")
       ];
 
