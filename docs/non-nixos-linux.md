@@ -1,11 +1,46 @@
 # Non-NixOS Linux setup
 
 The `sandboxed` wrapper and the jailed templates run on any systemd-based Linux
-distribution (Ubuntu, Debian, Fedora, …), not just NixOS. On NixOS the
-`security.sandboxed` module configures the host; elsewhere the `setup-linux`
-app does the equivalent, or you can perform the same steps by hand.
+distribution (Ubuntu, Debian, Fedora). The `setup-linux` app configures the host 
+system, or you can perform the same steps by hand.
 
-The quickest path:
+## Install Nix and enable flakes
+
+The wrapper and templates require Nix with flakes enabled. Install Nix
+using either the [official Nix installer](https://nix.dev/install-nix)
+or the [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer).
+
+**Fedora and other SELinux-enforcing distributions must use the
+Determinate Systems installer.** The official installer does not
+support SELinux; running it on an enforcing host produces a Nix
+installation that fails at first use. Determinate's installer ships
+the SELinux policy bits needed for the daemon and the store to work
+under enforcing mode.
+
+After installing, enable flakes by adding this line to your Nix
+configuration (*note:* the Determinate Systems installer enables flakes by default)
+
+```sh
+mkdir -p ~/.config/nix
+echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
+```
+
+For a system-wide enable instead, append the same line to
+`/etc/nix/nix.conf` and restart the Nix daemon
+(`sudo systemctl restart nix-daemon` on multi-user installs).
+
+Verify:
+
+```sh
+nix --version
+nix flake show github:pete3n/nix-slop-dev   # should list packages and templates
+```
+
+If `flake show` errors with "experimental Nix feature 'nix-command' is
+disabled", the previous step didn't take — check your editor wrote to
+the right path and that `~/.config/nix/nix.conf` is owned by your user.
+
+To setup using the provided app:
 
 ```sh
 nix run github:pete3n/nix-slop-dev#setup-linux            # diagnose (mutates nothing)
@@ -29,7 +64,7 @@ modifies anything. The prerequisites are:
 - **auditd** — installed and active (step 2).
 - **sudoers drop-in** — `/etc/sudoers.d/sandboxed` (step 3).
 - **unprivileged user namespaces** — permitted, or an AppArmor profile grants
-  them to bubblewrap (step 4). Only relevant on Ubuntu 23.10+/24.04.
+  them to bubblewrap (step 4). Only relevant on Ubuntu 23.10+/24.04+.
 
 ## 2. Install and enable auditd
 
@@ -52,7 +87,7 @@ Fedora's `audit` package ships `/etc/audit/rules.d/audit.rules` containing
 `-a task,never`, which clears the per-task audit context and silently disables
 **all** syscall auditing — even when explicit `-S connect` rules are
 installed. The Sandbox's violation banner and `setup-linux --log` are
-syscall-audit-based, so this rule must be commented out for observability to
+syscall-audit-based, so this rule must be commented out for alerts to
 work.
 
 `setup-linux --apply` does this automatically (and `setup-linux --remove`
@@ -95,7 +130,7 @@ sudo visudo -cf /path/to/your/draft        # must report "parsed OK"
 sudo install -m 0440 -o root -g root /path/to/your/draft /etc/sudoers.d/sandboxed
 ```
 
-## 4. AppArmor unprivileged user namespaces (Ubuntu 23.10+/24.04)
+## 4. AppArmor unprivileged user namespaces (Ubuntu 23.10+/24.04+)
 
 These releases block unprivileged user namespaces — which bubblewrap (the Jail)
 needs — when `kernel.apparmor_restrict_unprivileged_userns=1`. Check it:
