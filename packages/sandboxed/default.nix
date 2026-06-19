@@ -309,11 +309,11 @@ pkgs.writeShellScriptBin "sandboxed" # bash
 
     _cleanup() {
     	sudo "$AUDITCTL" \
-    		-d always,exit -F arch=b64 -S connect -F success=0 \
+    		-d always,exit -F arch=b64 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	sudo "$AUDITCTL" \
-    		-d always,exit -F arch=b32 -S connect -F success=0 \
+    		-d always,exit -F arch=b32 -S connect \
     		-F uid="$(id -u)" -F auid=-1 \
     		-F key="''${AUDIT_KEY}" 2>/dev/null || true
     	[ -n "''${watch_pid:-}" ] && kill "''${watch_pid}" 2>/dev/null || true
@@ -433,18 +433,22 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		sudo "$AUDITCTL" -d "''${_rule#-a }" 2>/dev/null || true
     	done
 
-    # `-F success=0` filters at the kernel: only failed connects are
-    # logged, which is exactly what the sandbox alerts on (allowed
-    # destinations succeed and don't need to clutter the audit log).
-    # auid=4294967295 (the unset loginuid) scopes to processes spawned
-    # by `sudo systemd-run --pty` — i.e. our transient unit — so events
-    # from the user's regular shell don't get the sandbox key.
+    # We deliberately do NOT add `-F success=0` here. Kernels differ on
+    # whether IPAddressDeny fails the connect() syscall: Ubuntu's kernel
+    # returns an error and `success=no` matches; Fedora's lets connect()
+    # return 0 and silently drops the egress packets, so a `success=0`
+    # filter never matches and no events are logged at all. Logging all
+    # connects, scoped by `auid=4294967295 + uid=$USER + per-session
+    # key`, catches both kernel behaviours; the awk allowed_re filter
+    # below skips events whose destination is in the allow list, so the
+    # display layer only surfaces the connects the kernel actually
+    # blocked.
     sudo "$AUDITCTL" \
-    	-a always,exit -F arch=b64 -S connect -F success=0 \
+    	-a always,exit -F arch=b64 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
     sudo "$AUDITCTL" \
-    	-a always,exit -F arch=b32 -S connect -F success=0 \
+    	-a always,exit -F arch=b32 -S connect \
     	-F uid="$(id -u)" -F auid=4294967295 \
     	-k "''${AUDIT_KEY}"
 
