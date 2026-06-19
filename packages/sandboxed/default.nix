@@ -480,10 +480,14 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			# targets and must not be filtered out by an exe path check.
     			if (_evt_saddr != "" && _evt_saddr ~ _allowed_re) return
 
-    			# Extract destination IP and port for the banner, so the user
+    			# Extract destination IP and port for the banner so the user
     			# can tell which connect attempt was flagged. When SOCKADDR
-    			# wasn't recorded for this event (some failed connects), fall
-    			# back to "unknown" rather than omit the line.
+    			# was not recorded for this event (some failed connects), we
+    			# fall back to unknown rather than omit the line. No
+    			# apostrophes in this block: the surrounding bash heredoc
+    			# uses single quotes to delimit the awk program, so any
+    			# apostrophe here would close that string and break the
+    			# script.
     			if (_evt_saddr != "") {
     				_dst  = _evt_saddr; gsub(/.*laddr=/, "", _dst);  gsub(/ .*/,      "", _dst)
     				_port = _evt_saddr; gsub(/.*lport=/, "", _port); gsub(/[^0-9].*/, "", _port)
