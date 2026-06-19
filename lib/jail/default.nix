@@ -155,17 +155,43 @@ let
   # templates surface dyld or Mach-service failures during HITL smoke.
   # Exposed so templates can introspect (and so the slice 9 test can
   # pin the baseline byte-for-byte).
+  #
+  # Issue-12 HITL follow-up additions (jail-shell + /usr/bin/curl):
+  #   - file-ioctl /dev: bash TIOCSPGRP for interactive job control.
+  #   - file-write-data /dev/null + /dev/tty: `>/dev/null 2>&1` everywhere,
+  #     and tools that prompt via the controlling terminal.
+  #   - /usr/share/locale: locale-aware libc (LC_CTYPE under UTF-8).
+  #   - /private/etc/profile, /private/etc/bash.bashrc, /private/etc/bashrc:
+  #     bash login startup chain. On nix-darwin /etc/bashrc symlinks into
+  #     /nix/store so the literal rule misses it, but /etc/profile's
+  #     `[ -r /etc/bashrc ] && . /etc/bashrc` test fails closed (no read
+  #     permission → -r is false) so the deny silently skips rather than
+  #     producing a visible error.
+  #   - /private/etc/paths + /private/etc/paths.d: path_helper invocation
+  #     from /etc/profile.
+  #   - /private/etc/ssl: /usr/bin/curl ships against system LibreSSL
+  #     which reads openssl.cnf + cert.pem at startup.
   prelude = ''
     (allow process*)
     (allow sysctl-read)
     (allow mach-lookup)
     (allow ipc-posix-shm*)
     (allow signal)
+    (allow file-ioctl (subpath "/dev"))
+    (allow file-write-data (literal "/dev/null"))
+    (allow file-write-data (literal "/dev/tty"))
     (allow file-read-metadata (subpath "/"))
     (allow file-read* (literal "/"))
     (allow file-read* (subpath "/usr/lib"))
-    (allow file-read* (subpath "/System/Library"))
     (allow file-read* (subpath "/usr/share/icu"))
+    (allow file-read* (subpath "/usr/share/locale"))
+    (allow file-read* (subpath "/System/Library"))
+    (allow file-read* (literal "/private/etc/bash.bashrc"))
+    (allow file-read* (literal "/private/etc/bashrc"))
+    (allow file-read* (literal "/private/etc/paths"))
+    (allow file-read* (subpath "/private/etc/paths.d"))
+    (allow file-read* (literal "/private/etc/profile"))
+    (allow file-read* (subpath "/private/etc/ssl"))
     (allow file-read* (subpath "/private/var/db/dyld"))
     (allow file-read* (subpath "/private/var/db/timezone"))
   '';
@@ -428,10 +454,27 @@ let
   # = …; }` the network-outbound rules from the Sandbox profile are
   # specific operations and survive the deny-default — see
   # `modules/macos-sandbox/profile.nix` and ADR-0003.
+  # `name` is the wrapper drv's output name (also the placeholder script's
+  # "Usage:" hint). `mainBin` resolves the real binary via lib.getExe, so
+  # templates can pass real pkgs (pkgs.bashInteractive, claude-pkg) and let
+  # meta.mainProgram (with pname fallback) name the binary inside. Pre-HITL
+  # this was `${pkg}/bin/${name}`, which silently produced non-existent
+  # paths whenever the wrapper's logical name diverged from the pkg's
+  # binary name.
+  #
+  # The constructor also implicitly grants file-read on pkg's entire
+  # closure. mainBin and its runtime deps must be readable, otherwise
+  # sandbox-exec fails on launch with "Operation not permitted" — a
+  # silent footgun where callers had to remember to feed pkg back
+  # through add-pkg-deps. The implicit allows sit BETWEEN the prelude
+  # and the caller's combinators, so a caller-supplied combinator can
+  # still override (last-match-wins). binPaths is NOT extended; PATH
+  # ordering remains the caller's business via explicit add-pkg-deps.
   jail = name: pkg: combinatorList:
     let
+      mainBinAllows = (combinators.add-pkg-deps [ pkg ]).sbpl;
       merged = lib.foldl' mergeSlices emptySlice combinatorList;
-      sbplFragment = "(deny default)\n" + prelude + merged.sbpl;
+      sbplFragment = "(deny default)\n" + prelude + mainBinAllows + merged.sbpl;
       placeholderScript = ''
         printf '%s\n' "Error: ${name} must be run via sandboxed for jail enforcement." >&2
         printf '%s\n' "Usage: sandboxed -- ${name} [args]" >&2
@@ -443,7 +486,7 @@ let
         jailData = {
           sbpl = sbplFragment;
           inherit (merged) preflight cleanup env envForward binPaths;
-          mainBin = "${pkg}/bin/${name}";
+          mainBin = lib.getExe pkg;
         };
       };
 in

@@ -682,7 +682,15 @@ let
       expr = let
         fakePkg = pkgs.runCommand "jail-test-empty-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-empty'';
       in (jail "jail-test-empty" fakePkg []).jailData.sbpl;
-      expected = "(deny default)\n" + prelude;
+      # The jail constructor implicitly adds pkg's closure to the SBPL
+      # so mainBin (lib.getExe pkg) is readable — without it sandbox-exec
+      # would refuse to launch the jailed binary at all ("Operation not
+      # permitted" at exec time, issue 12 HITL surface). The pkg-closure
+      # allows sit between prelude and the caller's combinators, so the
+      # caller's allows can still override (last-match-wins).
+      expected = let
+        fakePkg = pkgs.runCommand "jail-test-empty-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-empty'';
+      in "(deny default)\n" + prelude + (add-pkg-deps [ fakePkg ]).sbpl;
     };
 
     # Slice 9: combinator-list fold. The SBPL is deny-default + prelude
@@ -696,7 +704,12 @@ let
       expr = let
         fakePkg = pkgs.runCommand "jail-test-order-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-order'';
       in (jail "jail-test-order" fakePkg [ time-zone network ]).jailData.sbpl;
-      expected = "(deny default)\n" + prelude + time-zone.sbpl + network.sbpl;
+      expected = let
+        fakePkg = pkgs.runCommand "jail-test-order-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-order'';
+      in "(deny default)\n" + prelude
+        + (add-pkg-deps [ fakePkg ]).sbpl
+        + time-zone.sbpl
+        + network.sbpl;
     };
 
     # Slice 9: every non-SBPL slice field (preflight, cleanup, env,
@@ -737,19 +750,68 @@ let
     # jail-nix. lib.isDerivation pins the contract — issue 11 will
     # later assert on the same attr to detect "this is a jailed
     # pkg, splice its jailData".
-    testJailReturnsDerivationWithMainBinPath = {
+    #
+    # mainBin uses `lib.getExe pkg` — the nixpkgs convention. Templates
+    # pass real packages (pkgs.bashInteractive, llm-agents.claude-code,
+    # …) where the wrapper drv's name ("jailed-shell", "jailed-claude")
+    # differs from the binary inside the pkg ("bash", "claude"). HITL on
+    # issue 12 surfaced the original `${pkg}/bin/${name}` shape as a
+    # contract bug: it forced callers to hand-build wrapper drvs whose
+    # bin/<name> matched the jail's wrapper name, which is exactly the
+    # boilerplate getExe exists to avoid. meta.mainProgram (or pname
+    # fallback) is what real pkgs already expose.
+    testJailMainBinUsesGetExe = {
       expr = let
-        leafPkg = pkgs.runCommand "jail-test-drv-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-drv'';
+        leafPkg = pkgs.runCommand "jail-test-drv-pkg"
+          { meta.mainProgram = "leaf-binary"; }
+          ''mkdir -p $out/bin; : > $out/bin/leaf-binary'';
         result = jail "jail-test-drv" leafPkg [];
       in {
         isDerivation = lib.isDerivation result;
         mainBin = result.jailData.mainBin;
       };
       expected = let
-        leafPkg = pkgs.runCommand "jail-test-drv-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-drv'';
+        leafPkg = pkgs.runCommand "jail-test-drv-pkg"
+          { meta.mainProgram = "leaf-binary"; }
+          ''mkdir -p $out/bin; : > $out/bin/leaf-binary'';
       in {
         isDerivation = true;
-        mainBin = "${leafPkg}/bin/jail-test-drv";
+        mainBin = "${leafPkg}/bin/leaf-binary";
+      };
+    };
+
+    # Regression net for the HITL findings on feature/macos-nix-darwin
+    # (issue 12 follow-up). Each of these allows was surfaced by an actual
+    # `Operation not permitted` from `jail-shell` against a live macOS
+    # 15.6.1 host: bash interactive startup, `/usr/bin/curl` (LibreSSL),
+    # locale-aware libc, and the TTY ioctl bash needs to set the
+    # foreground process group. Pinning them as individual hasInfix
+    # assertions (vs. byte-pinning the whole prelude) keeps later
+    # additions reviewable but blocks a silent removal of any one rule.
+    testPreludeCarriesHitlSurfacedAllows = {
+      expr = {
+        ttyIoctl = lib.hasInfix ''(allow file-ioctl (subpath "/dev"))'' prelude;
+        devNullWrite = lib.hasInfix ''(allow file-write-data (literal "/dev/null"))'' prelude;
+        devTtyWrite = lib.hasInfix ''(allow file-write-data (literal "/dev/tty"))'' prelude;
+        usrShareLocale = lib.hasInfix ''(allow file-read* (subpath "/usr/share/locale"))'' prelude;
+        etcBashBashrc = lib.hasInfix ''(allow file-read* (literal "/private/etc/bash.bashrc"))'' prelude;
+        etcBashrc = lib.hasInfix ''(allow file-read* (literal "/private/etc/bashrc"))'' prelude;
+        etcPaths = lib.hasInfix ''(allow file-read* (literal "/private/etc/paths"))'' prelude;
+        etcPathsD = lib.hasInfix ''(allow file-read* (subpath "/private/etc/paths.d"))'' prelude;
+        etcProfile = lib.hasInfix ''(allow file-read* (literal "/private/etc/profile"))'' prelude;
+        etcSsl = lib.hasInfix ''(allow file-read* (subpath "/private/etc/ssl"))'' prelude;
+      };
+      expected = {
+        ttyIoctl = true;
+        devNullWrite = true;
+        devTtyWrite = true;
+        usrShareLocale = true;
+        etcBashBashrc = true;
+        etcBashrc = true;
+        etcPaths = true;
+        etcPathsD = true;
+        etcProfile = true;
+        etcSsl = true;
       };
     };
   };

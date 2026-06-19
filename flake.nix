@@ -65,28 +65,59 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
-        if !(isLinuxSystem system) then {
-          # Darwin checks cover:
-          #   - sandbox-proxy: the proxy's hostname allowlist matcher
-          #     (pure Go).
-          #   - sandbox-profile: the Seatbelt profile generator (pure Nix).
-          #   - jail-lib: the Jail combinator library (pure Nix; issue 10).
-          #   - sandboxed-darwin: the per-jail wrapper builder (issue 11).
-          # No Seatbelt enforcement here — that part is HITL per spike 07.
-          sandbox-proxy = import ./tests/sandbox-proxy.nix { inherit pkgs; };
-          sandbox-profile = import ./tests/sandbox-profile.nix {
-            inherit pkgs;
-            inherit (pkgs) lib;
-          };
-          jail-lib = import ./tests/jail-lib.nix {
-            inherit pkgs;
-            inherit (pkgs) lib;
-          };
-          sandboxed-darwin = import ./tests/sandboxed-darwin.nix {
-            inherit pkgs;
-            inherit (pkgs) lib;
-          };
-        }
+        if !(isLinuxSystem system) then
+          let
+            slop = self.lib.slopEnv pkgs;
+            slopExpected = [ "defaults" "jail" "mkBins" "mkShell" ];
+            slopActual = builtins.attrNames slop;
+            binsExpected = [ "claude" "jail-shell" "jailedClaude" "jailedShell" "sandboxedPackages" "shellHook" ];
+            binsActual = builtins.attrNames (slop.mkBins {
+              projectName = "byteq-test";
+              claudeMdFile = ../templates/claude-code/slop-env/claude-config/CLAUDE.md;
+              rulesDir = ../templates/claude-code/slop-env/claude-config/rules;
+              skillsDir = ../templates/claude-code/slop-env/claude-config/skills;
+            });
+          in
+          {
+            # Darwin checks cover:
+            #   - sandbox-proxy: the proxy's hostname allowlist matcher
+            #     (pure Go).
+            #   - sandbox-profile: the Seatbelt profile generator (pure Nix).
+            #   - jail-lib: the Jail combinator library (pure Nix; issue 10).
+            #   - sandboxed-darwin: the per-jail wrapper builder (issue 11).
+            #   - lib-slop-env-{shape,mkBins-shape}: slice-21 darwin.nix
+            #     dispatch matches the Linux contract.
+            # No Seatbelt enforcement here — that part is HITL per spike 07.
+            sandbox-proxy = import ./tests/sandbox-proxy.nix { inherit pkgs; };
+            sandbox-profile = import ./tests/sandbox-profile.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+            jail-lib = import ./tests/jail-lib.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+            sandboxed-darwin = import ./tests/sandboxed-darwin.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+
+            lib-slop-env-shape =
+              if slopActual == slopExpected then
+                pkgs.runCommand "lib-slop-env-shape" { } ''
+                  echo "lib.slopEnv shape: ${builtins.concatStringsSep " " slopActual}" > $out
+                ''
+              else
+                throw "lib.slopEnv shape regressed on Darwin. expected: ${builtins.concatStringsSep " " slopExpected} actual: ${builtins.concatStringsSep " " slopActual}";
+
+            lib-slop-env-mkBins-shape =
+              if binsActual == binsExpected then
+                pkgs.runCommand "lib-slop-env-mkBins-shape" { } ''
+                  echo "lib.slopEnv mkBins shape: ${builtins.concatStringsSep " " binsActual}" > $out
+                ''
+              else
+                throw "lib.slopEnv mkBins shape regressed on Darwin. expected: ${builtins.concatStringsSep " " binsExpected} actual: ${builtins.concatStringsSep " " binsActual}";
+          }
         else
         let
           slop = self.lib.slopEnv pkgs;
@@ -296,7 +327,7 @@
       # Slice 20 (#03) adds setup-linux for non-NixOS hosts (diagnoses
       # Sandbox/Jail prerequisites; #04 adds --apply mode behind the same
       # entry point).
-      apps = forLinux (
+      apps = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -311,11 +342,17 @@
             type = "app";
             program = "${bins.jail-shell}/bin/jail-shell";
           };
-          setup-linux = {
-            type = "app";
-            program = "${self.packages.${system}.setup-linux}/bin/setup-linux";
-          };
-        }
+        } // (
+          # setup-linux is the non-NixOS prereq probe + apply tool;
+          # Darwin's Seatbelt is daemonless so the app has no Darwin
+          # equivalent.
+          if isLinuxSystem system then {
+            setup-linux = {
+              type = "app";
+              program = "${self.packages.${system}.setup-linux}/bin/setup-linux";
+            };
+          } else { }
+        )
       );
 
       # Slop Env construction lib. Templates and apps call lib.slopEnv pkgs
@@ -326,13 +363,19 @@
         slopEnv = pkgs:
           let
             system = pkgs.stdenv.hostPlatform.system;
+            isDarwin = pkgs.stdenv.isDarwin;
           in
           import ./lib/slop-env {
             inherit pkgs;
             sandboxed = self.packages.${system}.sandboxed;
-            prereqGuidance = self.packages.${system}.prereq-guidance;
+            prereqGuidance =
+              if isDarwin then null else self.packages.${system}.prereq-guidance;
             claude-pkg = llm-agents.packages.${system}.claude-code;
-            jail = jail-nix.lib.init pkgs;
+            # Linux: jail-nix's __functor (bwrap-based combinators).
+            # Darwin: nix-slop-dev's Seatbelt combinator library.
+            jail =
+              if isDarwin then self.lib.jail pkgs
+              else jail-nix.lib.init pkgs;
           };
 
         # Seatbelt combinator library for the Darwin Jail (issue 10).

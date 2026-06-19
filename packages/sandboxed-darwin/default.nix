@@ -17,19 +17,24 @@
 # wrapper per jail via `pkgs.callPackage ./sandboxed-darwin { jail = …; }`.
 # When null (the default), the wrapper produces the network-only build,
 # byte-for-byte identical to the pre-issue-11 shape.
+#
+# Issue 12 prerequisite: `binName` lets templates name per-jail wrappers
+# distinctly so two builds (jailed-claude + jailed-shell) coexist on PATH.
+# Default preserves the network-only contract: the wrapper is `sandboxed`.
 {
   pkgs,
   lib,
   sandbox-proxy,
   stateDir ? ".local/state/sandboxed",
   jail ? null,
+  binName ? "sandboxed",
 }:
 let
   render = import ./render.nix { inherit lib; };
   sbplTemplate = pkgs.writeText "sandbox-profile.sbpl.tmpl"
     (render.combinedSbplTemplate { inherit jail; });
 in
-pkgs.writeShellScriptBin "sandboxed" # bash
+pkgs.writeShellScriptBin binName # bash
   ''
     set -eu
 
@@ -510,18 +515,20 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     # mode and for jails with no env / envForward combinators.
     ${render.mkJailEnvBlock { inherit jail; }}
 
-    # Run sandbox-exec as a child (NOT via `exec`) so the EXIT trap fires
-    # and tears down the proxy + tempdir when the sandboxed command
-    # finishes. `exec` would replace the wrapper process and orphan the
-    # proxy on every invocation.
-    /usr/bin/sandbox-exec -f "$profile_file" \
-    	/usr/bin/env -i "''${_env_args[@]}" ${render.mkExecCommand { inherit jail; }} &
-    child_pid=$!
-    trap _signal_child INT TERM
-    # `wait` with `set -e` would abort on any non-zero exit — disable
-    # that explicitly so we can propagate the child's exit code.
+    # Run sandbox-exec as a FOREGROUND child (not via `exec` — exec would
+    # replace the wrapper process and orphan the proxy on every
+    # invocation; the EXIT trap below tears down the proxy + tmpdir on
+    # this script's natural exit).
+    #
+    # Foreground (no `&`) is required for interactive use: bash without
+    # job control redirects backgrounded commands' stdin to /dev/null,
+    # which makes an interactive shell inside the sandbox see a non-TTY
+    # stdin and exit immediately on startup. Foreground keeps the
+    # controlling TTY connected; INT/TERM propagate to the child via the
+    # process group (no explicit signal forwarder needed).
     set +e
-    wait "$child_pid"
+    /usr/bin/sandbox-exec -f "$profile_file" \
+    	/usr/bin/env -i "''${_env_args[@]}" ${render.mkExecCommand { inherit jail; }}
     exit_code=$?
     set -e
     exit "$exit_code"

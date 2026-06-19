@@ -1,0 +1,157 @@
+{ pkgs
+, sandboxed
+, claude-pkg
+, jail
+, shared
+}:
+
+# Darwin-specific Slop Env assembly. Seatbelt-based jail enforcement
+# (ADR-0001 + ADR-0004): no daemon, no NOPASSWD-sudo, no nested
+# sandbox-exec. The sandboxed wrapper is overridden per-jail because
+# `sandbox-exec` cannot enter a sandbox from inside one — the merged
+# Sandbox+Jail SBPL profile is baked at Nix-eval and stamped onto each
+# wrapper.
+#
+# Produces { mkShell; mkBins; } consumed by lib/slop-env/default.nix.
+
+let
+  lib = pkgs.lib;
+
+  projectNamePlaceholder = "__SLOP_ENV_PROJECT_NAME__";
+
+  mkBins =
+    { projectName ? projectNamePlaceholder
+    , rulesDir ? ./defaults/rules
+    , skillsDir ? null
+    , claudeMdFile ? ./defaults/CLAUDE.md
+    , basePkgs ? shared.defaultBasePkgs
+    , projectPkgs ? [ ]
+    , projectEnv ? { }
+    , extraCombinators ? [ ]
+    , extraShellHook ? ""
+    , extraSandboxedEnvForwards ? [ ]
+    }:
+    let
+      claudeMd = shared.mkClaudeMd { inherit rulesDir claudeMdFile; };
+      claudeSettings = shared.defaultClaudeSettings;
+
+      # nix-darwin's /etc/bashrc and /etc/zshenv source a hard-coded
+      # /nix/store/.../set-environment path baked at activation time to
+      # inject the host's nix-darwin system PATH into interactive shells.
+      # The jail intentionally builds its own env via add-pkg-deps +
+      # set-env, so sourcing the host's environment would leak nix-darwin
+      # paths into the sandbox AND the file's specific store hash isn't
+      # in the jail's allow set. Both files honour
+      # __NIX_DARWIN_SET_ENVIRONMENT_DONE as a skip switch — set it so
+      # the jail shell starts cleanly without the closed-by-default deny
+      # on the set-environment path.
+      darwinJailExtras = with jail.combinators; [
+        # Distinctive prompt inside the jail so the user can tell at a
+        # glance which shell they're in. The outer dev shell prints
+        # bash's default `bash-5.3$`; the jailed bash prints
+        # `(jail) bash-5.3$` in red.
+        (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
+        (set-env "__NIX_DARWIN_SET_ENVIRONMENT_DONE" "1")
+      ];
+
+      jailCombinators =
+        (shared.mkJailCombinators {
+          inherit jail projectName skillsDir claudeMd claudeSettings basePkgs projectPkgs projectEnv;
+          # SIP keeps /usr/bin read-only on macOS; src and dst point to
+          # the same host path (the jail's read-allow emits with no bind
+          # preflight when src == dst).
+          envSrc = "/usr/bin/env";
+        })
+        ++ darwinJailExtras
+        ++ extraCombinators;
+
+      jailedClaude = jail.jail "jailed-claude" claude-pkg jailCombinators;
+      jailedShell = jail.jail "jailed-shell" pkgs.bashInteractive jailCombinators;
+
+      # Per-jail sandboxed-darwin wrappers (issue 11 / ADR-0001 line 17):
+      # sandbox-exec doesn't nest, so the Sandbox+Jail SBPL profile is
+      # baked into one wrapper per jailed binary. binName disambiguates
+      # the two on PATH.
+      sandboxedClaude = sandboxed.override {
+        jail = jailedClaude;
+        binName = "sandboxed-jailed-claude";
+      };
+      sandboxedShell = sandboxed.override {
+        jail = jailedShell;
+        binName = "sandboxed-jailed-shell";
+      };
+      sandboxedPackages = [ sandboxedClaude sandboxedShell ];
+
+      # User-facing entry points as PATH binaries (writeShellScriptBin)
+      # so they survive the shellHook's exec into the user's login
+      # shell — zsh / fish / etc can't see bash functions defined in
+      # nix-develop bash, but everything in `packages` is on $PATH.
+      claude = pkgs.writeShellScriptBin "claude" ''
+        set -euo pipefail
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q --allow api.anthropic.com \
+          -e CLAUDE_CONFIG_DIR \
+          ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}"$@"
+      '';
+
+      jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
+        set -euo pipefail
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        exec ${sandboxedShell}/bin/sandboxed-jailed-shell "$@"
+      '';
+
+      # Darwin shellHook: skip Linux-only prereq checks (Seatbelt is
+      # daemonless and runs unprivileged). Claude credentials check +
+      # ready banner are identical to Linux.
+      shellHook = ''
+        # Project unique config
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+
+        # Setup checks
+        _setup_ok=1
+
+        # Check Claude credentials
+        if [ ! -s "$CLAUDE_SHARED_DIR/.credentials.json" ]; then
+        	printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
+        	printf '  Run claude to complete OAuth login on first use.\n\n'
+        	_setup_ok=0
+        fi
+
+        if [ "$_setup_ok" -eq 1 ]; then
+        	printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
+        fi${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
+      '';
+    in
+    {
+      inherit claude jail-shell jailedClaude jailedShell sandboxedPackages shellHook;
+    };
+
+  mkShell = args:
+    let
+      binArgs = builtins.removeAttrs args [ "name" ];
+      bins = mkBins binArgs;
+      projectPkgs = args.projectPkgs or [ ];
+    in
+    pkgs.mkShell {
+      name = args.name or "nix-shell";
+      packages = projectPkgs ++ bins.sandboxedPackages ++ [
+        bins.jailedClaude
+        bins.jailedShell
+        bins.claude
+        bins.jail-shell
+      ];
+      inherit (bins) shellHook;
+    };
+in
+{
+  inherit mkShell mkBins;
+}

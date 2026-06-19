@@ -74,6 +74,11 @@ rec {
     , basePkgs
     , projectPkgs
     , projectEnv
+    , # Source path for the env interpreter the jail mounts at
+      # /usr/bin/env. Linux bwrap binds coreutils' env into the mount
+      # namespace; Darwin's /usr/bin is SIP-protected so the binding's
+      # source is the literal /usr/bin/env on the host (slice 21).
+      envSrc ? "${pkgs.coreutils}/bin/env"
     ,
     }:
     let
@@ -88,7 +93,7 @@ rec {
       mount-cwd
       no-new-session
 
-      (ro-bind "${pkgs.coreutils}/bin/env" "/usr/bin/env")
+      (ro-bind envSrc "/usr/bin/env")
 
       # Ephemeral config dir; project-fixed content written on top.
       (tmpfs (noescape cfgDir))
