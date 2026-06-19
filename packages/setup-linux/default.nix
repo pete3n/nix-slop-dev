@@ -28,6 +28,13 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     apparmor_profile_path="/etc/apparmor.d/''${apparmor_profile_name}"
     bwrap_glob='/nix/store/*/bin/bwrap'
     cgroup_controllers=/sys/fs/cgroup/cgroup.controllers
+    # Fedora's audit-rules package writes /etc/audit/rules.d/audit.rules
+    # containing `-a task,never`, which suppresses per-task audit context
+    # and silently disables ALL syscall auditing — defeating sandbox
+    # observability. apply mode comments the line out with this marker so
+    # --remove can restore the original.
+    task_never_file=/etc/audit/rules.d/audit.rules
+    task_never_marker='# nix-slop-dev: -a task,never  (re-enable with setup-linux --remove)'
 
     _usage() {
     	printf >&2 '%s\n' \
@@ -70,6 +77,15 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     			break
     		fi
     	done
+    	# task,never audit rule active in the running kernel? auditctl prints
+    	# it as `-a never,task` (normalized). Either form in the source file
+    	# produces the same kernel rule. We need to check the LIVE kernel
+    	# state because file-only changes don't take effect until augenrules.
+    	task_never_active=0
+    	if sudo -n auditctl -l 2>/dev/null \
+    		| ${pkgs.gnugrep}/bin/grep -qE '^-a (task,never|never,task)\b'; then
+    		task_never_active=1
+    	fi
 
     	printf 'setup-linux: Sandbox/Jail prerequisites\n\n'
     	if run_checks \
@@ -78,7 +94,8 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		"$auditd_state" \
     		"$sudoers_file" \
     		"$userns_sysctl" \
-    		"$apparmor_profile_loaded"; then
+    		"$apparmor_profile_loaded" \
+    		"$task_never_active"; then
     		printf '\nAll prerequisites met.\n'
     		exit 0
     	else
@@ -126,8 +143,16 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     	else
     		userns_ok=0
     	fi
+    	# task,never is satisfied if no such rule is active in the running
+    	# kernel. Fedora's audit-rules package ships one; apply mode comments
+    	# it out and removes from the kernel so syscall auditing works.
+    	task_never_ok=1
+    	if sudo -n auditctl -l 2>/dev/null \
+    		| ${pkgs.gnugrep}/bin/grep -qE '^-a (task,never|never,task)\b'; then
+    		task_never_ok=0
+    	fi
 
-    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok")"
+    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok" "$task_never_ok")"
     	if [ -z "$plan" ]; then
     		printf 'setup-linux: already configured; nothing to do.\n'
     		exit 0
@@ -223,6 +248,25 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		fi
     	fi
 
+    	# Comment out Fedora's task,never rule and remove it from the running
+    	# kernel. The marker line gives --remove enough info to restore the
+    	# original. We comment BOTH `task,never` and `never,task` because the
+    	# file could carry either spelling; auditctl normalizes them but the
+    	# source file might not. If task_never_file is absent (non-Fedora),
+    	# the sed is a no-op.
+    	if [ "$task_never_ok" != 1 ]; then
+    		if [ -f "$task_never_file" ]; then
+    			sudo ${pkgs.gnused}/bin/sed -i -E \
+    				"s|^-a (task,never|never,task)$|''${task_never_marker} (was: -a \\1)|" \
+    				"$task_never_file"
+    			# augenrules reassembles /etc/audit/audit.rules from rules.d/
+    			# so the change persists across reboots.
+    			sudo augenrules --load 2>/dev/null || true
+    		fi
+    		sudo auditctl -d task,never 2>/dev/null || true
+    		sudo auditctl -d never,task 2>/dev/null || true
+    	fi
+
     	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'
     	exit 0
     }
@@ -257,8 +301,16 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		sudoers_present=0
     	fi
 
+    	# Did apply mode previously comment out task,never? Look for our
+    	# marker in the file. If present, --remove should restore the line.
+    	task_never_was_disabled=0
+    	if [ -f "$task_never_file" ] \
+    		&& sudo ${pkgs.gnugrep}/bin/grep -qF "$task_never_marker" "$task_never_file" 2>/dev/null; then
+    		task_never_was_disabled=1
+    	fi
+
     	plan="$(plan_remove_actions "$apparmor_profile_present" \
-    		"$apparmor_profile_loaded" "$sudoers_present")"
+    		"$apparmor_profile_loaded" "$sudoers_present" "$task_never_was_disabled")"
     	if [ -z "$plan" ]; then
     		printf 'setup-linux: nothing to remove (host already clean).\n'
     		exit 0
@@ -293,6 +345,17 @@ pkgs.writeShellScriptBin "setup-linux" # bash
 
     	if [ "$sudoers_present" = 1 ]; then
     		sudo ${pkgs.coreutils}/bin/rm -f "$sudoers_file"
+    	fi
+
+    	# Restore Fedora's task,never rule: uncomment our marker line back to
+    	# its original `-a task,never` form, reload via augenrules, and put
+    	# the rule back in the running kernel.
+    	if [ "$task_never_was_disabled" = 1 ]; then
+    		sudo ${pkgs.gnused}/bin/sed -i -E \
+    			"s|^''${task_never_marker} \\(was: -a (task,never|never,task)\\)$|-a \\1|" \
+    			"$task_never_file"
+    		sudo augenrules --load 2>/dev/null || true
+    		sudo auditctl -a task,never 2>/dev/null || true
     	fi
 
     	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'

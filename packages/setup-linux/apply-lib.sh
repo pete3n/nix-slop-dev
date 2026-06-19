@@ -136,16 +136,20 @@ apparmor_profile_content() {
 		"}"
 }
 
-# Compute the idempotent change plan from two satisfied-booleans (1 = already
-# in place, 0 = needs action): the sudoers drop-in and auditd. Prints one line
-# per planned action, in apply order; prints nothing when the host is already
-# configured (the no-op the caller detects by empty output). Always returns 0.
+# Compute the idempotent change plan from satisfied-booleans (1 = already in
+# place, 0 = needs action): sudoers drop-in, auditd, optional userns AppArmor
+# profile, optional task,never audit-suppression rule (Fedora ships one that
+# defeats sandbox observability). Prints one line per planned action in apply
+# order; prints nothing when everything is already in place. Always returns 0.
 plan_actions() {
 	sudoers_ok="$1"
 	auditd_ok="$2"
 	# Optional: 1 = unprivileged userns permitted (no profile needed). Absent
 	# defaults to satisfied, preserving the original two-argument behavior.
 	userns_ok="${3:-1}"
+	# Optional: 1 = no task,never rule active (good); 0 = active and must be
+	# removed. Absent defaults to satisfied.
+	task_never_ok="${4:-1}"
 
 	if [ "$auditd_ok" != "1" ]; then
 		printf 'install and enable auditd\n'
@@ -155,6 +159,9 @@ plan_actions() {
 	fi
 	if [ "$userns_ok" != "1" ]; then
 		printf 'install AppArmor profile permitting unprivileged user namespaces for bubblewrap\n'
+	fi
+	if [ "$task_never_ok" != "1" ]; then
+		printf 'comment out `-a task,never` in /etc/audit/rules.d/audit.rules (suppresses sandbox observability) and remove from running kernel\n'
 	fi
 	return 0
 }
@@ -171,12 +178,20 @@ plan_remove_actions() {
 	apparmor_profile_present="$1"
 	apparmor_profile_loaded="$2"
 	sudoers_present="$3"
+	# Optional: 1 if our magic marker is in /etc/audit/rules.d/audit.rules
+	# (meaning apply mode previously commented out the Fedora-default
+	# task,never rule and we should restore it on remove). 0 / absent = no
+	# restoration needed.
+	task_never_was_disabled="${4:-0}"
 
 	if [ "$apparmor_profile_present" = "1" ] || [ "$apparmor_profile_loaded" = "1" ]; then
 		printf 'unload and delete AppArmor profile (/etc/apparmor.d/nix-slop-dev-bwrap)\n'
 	fi
 	if [ "$sudoers_present" = "1" ]; then
 		printf 'delete sudoers drop-in (/etc/sudoers.d/sandboxed)\n'
+	fi
+	if [ "$task_never_was_disabled" = "1" ]; then
+		printf 'restore `-a task,never` in /etc/audit/rules.d/audit.rules (re-enables Fedora default)\n'
 	fi
 	return 0
 }

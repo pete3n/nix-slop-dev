@@ -81,20 +81,38 @@ pkgs.runCommand "setup-linux-checks-tests" { } ''
   [ "$status" -eq 0 ] || fail "userns 1 + profile loaded should pass (rc=$status)"
   case "$report" in "✓"*) ;; *) fail "userns 1 + profile: expected ✓, got: $report" ;; esac
 
+  # Fedora's `-a task,never` audit rule suppresses per-task audit context and
+  # kills all syscall auditing. The check fails when it's active in the
+  # running kernel (apply mode removes it) and passes otherwise.
+  report=$(check_task_never 0) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "task_never inactive should pass (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "task_never 0: expected ✓, got: $report" ;; esac
+
+  report=$(check_task_never 1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "task_never active should fail (rc=$status)"
+  case "$report" in "✗"*) ;; *) fail "task_never 1: expected ✗, got: $report" ;; esac
+
   # Aggregation: run_checks reports every prerequisite and exits zero only when
   # all pass. Args: systemd_version controllers_file auditd_state sudoers_file
-  # userns_sysctl apparmor_profile_loaded.
+  # userns_sysctl apparmor_profile_loaded task_never_active.
   touch agg-controllers agg-sudoers
-  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 > allpass.txt \
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 > allpass.txt \
     && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "all prerequisites met should exit 0 (rc=$status)"
-  [ "$(grep -c '✓' allpass.txt)" -eq 5 ] || fail "all-pass: expected 5 ✓ lines, got:
+  [ "$(grep -c '✓' allpass.txt)" -eq 6 ] || fail "all-pass: expected 6 ✓ lines, got:
 $(cat allpass.txt)"
   case "$(cat allpass.txt)" in *✗*) fail "all-pass output must contain no ✗" ;; esac
 
-  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 > onefail.txt \
+  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 > onefail.txt \
     && status=0 || status=$?
   [ "$status" -ne 0 ] || fail "a failing prerequisite should exit nonzero"
+
+  # task,never active alone (everything else green) should also fail the
+  # aggregate, since it silently disables sandbox observability.
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 1 > tnactive.txt \
+    && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "task_never active alone should fail the aggregate"
+  case "$(cat tnactive.txt)" in *task,never*) ;; *) fail "task_never failure should mention the rule name" ;; esac
 
   touch "$out"
 ''

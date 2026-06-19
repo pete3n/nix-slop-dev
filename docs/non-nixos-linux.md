@@ -46,6 +46,26 @@ sudo dnf install -y audit
 sudo systemctl enable --now auditd
 ```
 
+### Fedora: remove the `task,never` suppression rule
+
+Fedora's `audit` package ships `/etc/audit/rules.d/audit.rules` containing
+`-a task,never`, which clears the per-task audit context and silently disables
+**all** syscall auditing — even when explicit `-S connect` rules are
+installed. The Sandbox's violation banner and `setup-linux --log` are
+syscall-audit-based, so this rule must be commented out for observability to
+work.
+
+`setup-linux --apply` does this automatically (and `setup-linux --remove`
+restores it). To do it by hand:
+
+```sh
+sudo sed -i 's|^-a task,never$|# nix-slop-dev: -a task,never  (re-enable with setup-linux --remove) (was: -a task,never)|' /etc/audit/rules.d/audit.rules
+sudo augenrules --load
+sudo auditctl -d task,never
+```
+
+Verify with `sudo auditctl -l` — the `-a never,task` line should be gone.
+
 ## 3. Write the sudoers drop-in
 
 The wrapper invokes five privileged tools through `sudo`. On non-NixOS it calls

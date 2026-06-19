@@ -94,6 +94,25 @@ check_userns_restriction() {
 	return 1
 }
 
+# Fedora's audit package ships /etc/audit/rules.d/audit.rules containing
+# `-a task,never`, which clears the per-task audit context. With it active,
+# no `__audit_syscall_exit` ever fires — so even `-a always,exit -S connect`
+# rules log nothing. The sandbox's violation banner and `--log` depend on
+# those syscall events, so we have to remove this rule on Fedora for
+# observability to work. The fact is "1 if the running kernel currently
+# carries a task,never rule, 0 otherwise"; the running-kernel state is
+# what matters because file-only changes don't take effect until augenrules
+# --load (which apply mode runs).
+check_task_never() {
+	task_never_active="$1"
+	if [ "$task_never_active" = "1" ]; then
+		printf '✗ `-a task,never` audit rule active — suppresses all syscall auditing including sandbox violation logging; run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply (apply mode comments out the line in /etc/audit/rules.d/audit.rules and removes it from the running kernel)\n'
+		return 1
+	fi
+	printf '✓ no task,never audit rule (syscall auditing enabled)\n'
+	return 0
+}
+
 # Run every prerequisite check against already-collected host facts, printing
 # each report line in order. Returns 0 only if all pass, 1 if any fail — the
 # check-mode exit contract. Each check runs regardless of earlier failures so
@@ -105,6 +124,7 @@ run_checks() {
 	sudoers_file="$4"
 	userns_sysctl="$5"
 	apparmor_profile_loaded="$6"
+	task_never_active="$7"
 
 	checks_failed=0
 	check_systemd_version "$systemd_version" || checks_failed=1
@@ -112,6 +132,7 @@ run_checks() {
 	check_auditd "$auditd_state" || checks_failed=1
 	check_sudoers "$sudoers_file" || checks_failed=1
 	check_userns_restriction "$userns_sysctl" "$apparmor_profile_loaded" || checks_failed=1
+	check_task_never "$task_never_active" || checks_failed=1
 
 	return "$checks_failed"
 }

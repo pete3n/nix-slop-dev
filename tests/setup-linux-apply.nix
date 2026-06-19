@@ -174,11 +174,27 @@ $plan"
     || fail "fully-unconfigured + restricted userns should plan three actions; got:
 $plan"
 
+  # plan_actions takes an optional fourth task_never-satisfied boolean
+  # (default 1). When task,never is active (0), it adds a removal action.
+  # Fedora's audit-rules package ships this rule and it suppresses sandbox
+  # observability; apply mode comments it out.
+  plan=$(plan_actions 1 1 1 0)
+  case "$plan" in *task,never*) ;; *) fail "task,never plan should mention the rule; got: $plan" ;; esac
+
+  plan=$(plan_actions 1 1 1 1)
+  [ -z "$plan" ] || fail "all four satisfied should be a no-op; got:
+$plan"
+
+  plan=$(plan_actions 0 0 0 0)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 4 ] \
+    || fail "fully-unconfigured + task,never should plan four actions; got:
+$plan"
+
   # plan_remove_actions is the symmetric uninstall planner. Args (1 = present
   # and to be removed; 0 = already absent, skip): apparmor_profile_present,
-  # apparmor_profile_loaded, sudoers_present. The profile-present and
-  # profile-loaded facts collapse to one action line — unload+delete is one
-  # logical step.
+  # apparmor_profile_loaded, sudoers_present, optional task_never_was_disabled.
+  # The profile-present and profile-loaded facts collapse to one action line —
+  # unload+delete is one logical step.
   plan=$(plan_remove_actions 0 0 0)
   [ -z "$plan" ] || fail "fully-clean host should yield an empty remove plan; got:
 $plan"
@@ -208,6 +224,20 @@ $plan"
     || fail "fully-installed host should plan two remove actions; got:
 $plan"
   case "$plan" in *auditd*) fail "remove plan must never mention auditd (separate concern); got: $plan" ;; *) ;; esac
+
+  # Optional fourth arg: task_never_was_disabled. When set, --remove plans
+  # to restore the Fedora-default task,never rule that apply mode commented
+  # out. Independent of the AppArmor / sudoers presence facts.
+  plan=$(plan_remove_actions 0 0 0 1)
+  case "$plan" in *task,never*) ;; *) fail "task_never_was_disabled=1 should plan restoration; got: $plan" ;; esac
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 1 ] \
+    || fail "task_never-only restore should plan exactly one action; got:
+$plan"
+
+  plan=$(plan_remove_actions 1 1 1 1)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 3 ] \
+    || fail "fully-installed + task_never_was_disabled should plan three remove actions; got:
+$plan"
 
   touch "$out"
 ''
