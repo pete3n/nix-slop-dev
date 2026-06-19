@@ -102,6 +102,15 @@
               inherit (pkgs) lib;
             };
 
+            # Issue 13: thin nix-darwin module. Eval-level only — checks
+            # the public option surface (`enable`, `package`, `stateDir`)
+            # plus the anti-tests pinning the deliberate absence of the
+            # NixOS module's sudoers/auditd machinery.
+            darwin-module = import ./tests/darwin-module.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+
             lib-slop-env-shape =
               if slopActual == slopExpected then
                 pkgs.runCommand "lib-slop-env-shape" { } ''
@@ -390,6 +399,15 @@
       nixosModules = {
         sandboxed = import ./modules/sandboxed/default.nix self;
         default = self.nixosModules.sandboxed;
+      };
+
+      # Issue 13: parallel of nixosModules for nix-darwin hosts.
+      # Thin by design — installs the sandboxed-darwin package with the
+      # configured stateDir. Seatbelt needs no root, so the NixOS
+      # module's sudoers/auditd surface has no counterpart here.
+      darwinModules = {
+        sandboxed = import ./modules/sandboxed-darwin/default.nix self;
+        default = self.darwinModules.sandboxed;
       };
 
       templates = {

@@ -9,8 +9,8 @@ inputs.nix-slop-dev.url = "github:pete3n/nix-slop-dev";
 
 ## Quick-start
 
-The wrapper runs on any systemd-based Linux distribution. Configure the host
-one of two ways, then initialize a template.
+The wrapper runs on NixOS, nix-darwin (macOS), and any systemd-based Linux
+distribution. Configure the host one of three ways, then initialize a template.
 
 ### NixOS
 
@@ -21,6 +21,19 @@ imports = [ inputs.nix-slop-dev.nixosModules.sandboxed ];
 security.sandboxed = {
   enable = true;
   users = [ "username" ];
+  # stateDir = ".local/state/sandboxed";  # default
+};
+```
+
+### nix-darwin (macOS)
+
+Add the module to your darwin config. Seatbelt is daemonless and unprivileged,
+so there is no `users` list — every user on the host gets the wrapper:
+
+```
+imports = [ inputs.nix-slop-dev.darwinModules.sandboxed ];
+security.sandboxed = {
+  enable = true;
   # stateDir = ".local/state/sandboxed";  # default
 };
 ```
