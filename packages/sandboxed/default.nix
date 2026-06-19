@@ -187,12 +187,15 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     	| ${pkgs.gawk}/bin/awk '
     		function emit(    _dst, _port) {
     			if (_evt_exe == "") return
-    			# Audit rule already filters at the kernel level: arch+S=connect
-    			# +success=0 +uid=$USER +auid=4294967295 +key=sandbox-...
-    			# Everything reaching emit() is a real sandbox-scoped failure,
-    			# so we no longer second-guess by exit code or by exe path
-    			# (host binaries like /usr/bin/curl are legitimate targets).
+    			# Skip events whose destination is in the allow list
+    			# (loopback + non-Internet socket families).
     			if (_evt_saddr != "" && _evt_saddr ~ /laddr=127\.|laddr=::1|saddr_fam=(local|netlink|packet|unix)/) return
+    			# Skip successful connects with no SOCKADDR record (some
+    			# kernel paths log connect() without an accompanying
+    			# SOCKADDR; if the call succeeded it cannot have been
+    			# IPAddressDeny-blocked, so emitting would be a false
+    			# positive). Failed connects with no SOCKADDR still emit.
+    			if (_evt_saddr == "" && _evt_exit == "0") return
     			# Key regex: sandbox-<binary>-<YYYYMMDD>-<HHMMSS>. The binary
     			# can contain dashes (setup-linux, jailed-claude), so we use
     			# .+ rather than [^-]+ for that segment.
@@ -473,12 +476,19 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     		'
     		function emit(    _msg, _dst, _port) {
     			if (_evt_key != _key) return
-    			# Audit rule already filters at the kernel level
-    			# (success=0 + per-session key); everything reaching emit()
-    			# is a real sandbox-scoped failure. Host binaries running
-    			# inside the sandbox (e.g. /usr/bin/curl) are legitimate
-    			# targets and must not be filtered out by an exe path check.
+    			# Skip events whose destination is in the allow list (this
+    			# is the primary suppression path; saddr_fam=netlink etc.
+    			# are baked into _allowed_re as non-Internet families).
     			if (_evt_saddr != "" && _evt_saddr ~ _allowed_re) return
+    			# Skip successful connects with no SOCKADDR record. The
+    			# kernel logs a few connect() syscalls without auxiliary
+    			# SOCKADDR records (some io_uring paths, internal abstract
+    			# sockets, etc.). They cannot have been blocked by
+    			# IPAddressDeny because they succeeded, so emitting them
+    			# as VIOLATIONs is a guaranteed false positive. Failed
+    			# connects with no SOCKADDR still emit (Ubuntu kernels
+    			# block at connect() time and frequently lack SOCKADDR).
+    			if (_evt_saddr == "" && _evt_exit == "0") return
 
     			# Extract destination IP and port for the banner so the user
     			# can tell which connect attempt was flagged. When SOCKADDR
