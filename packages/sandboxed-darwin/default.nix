@@ -406,6 +406,16 @@ pkgs.writeShellScriptBin binName # bash
     profile_file="''${tmp_dir}/sandbox.sbpl"
     ${lib.optionalString (jail != null && jail ? jailData) ''
       _jail_cwd="$(${pkgs.coreutils}/bin/realpath -s "$PWD")"
+      # Linux-parity project-name resolution (slice-21 follow-up). The
+      # caller (lib/slop-env/darwin.nix's claude/jail-shell launchers)
+      # exports NIX_SLOP_DEV_PROJECT_NAME when in zero-touch app mode;
+      # we fall back to the cwd basename so a bare `sandboxed-jailed-*`
+      # invocation outside the launcher still produces a sane path.
+      # Sanitiser mirrors Linux's placeholderPreamble — keep alnum and
+      # ._- so the basename can't smuggle sed delimiters into the
+      # substitution.
+      _project_name="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
+      _project_name="''${_project_name//[^A-Za-z0-9._-]/_}"
     ''}${render.mkHostResolveResolutionBlock {
       inherit jail;
       readlinkBin = "${pkgs.coreutils}/bin/readlink";

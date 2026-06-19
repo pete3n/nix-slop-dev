@@ -105,13 +105,42 @@ let
       };
       sandboxedPackages = [ sandboxedClaude sandboxedShell ];
 
+      usesPlaceholder = projectName == projectNamePlaceholder;
+
+      # Linux-parity placeholderPreamble (slice-21 follow-up). In zero-
+      # touch apps mode the launcher resolves PROJECT_NAME at runtime
+      # from $NIX_SLOP_DEV_PROJECT_NAME (caller-supplied, e.g. by a
+      # wrapping flake) or basename "$PWD" — and forwards the resolved
+      # name to the per-jail wrapper via NIX_SLOP_DEV_PROJECT_NAME so
+      # the wrapper's SBPL/preflight sed targets the same cfgDir
+      # (avoids a $PWD-race between launcher and wrapper). Sanitiser
+      # matches Linux's `[^A-Za-z0-9._-]` regex so the basename can't
+      # smuggle sed delimiters or shell metacharacters.
+      placeholderPreamble = ''
+        PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
+        PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
+        export NIX_SLOP_DEV_PROJECT_NAME="$PROJECT_NAME"
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/$PROJECT_NAME"
+      '';
+
+      # Concrete mode: projectName is baked at Nix-eval (template
+      # callers supply it explicitly). No runtime resolution needed —
+      # the wrapper's SBPL/preflight already have the concrete name
+      # baked in too, so the sed pipeline is a no-op.
+      concreteConfigDir = ''
+        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+      '';
+
+      configDirSetup =
+        if usesPlaceholder then placeholderPreamble else concreteConfigDir;
+
       # User-facing entry points as PATH binaries (writeShellScriptBin)
       # so they survive the shellHook's exec into the user's login
       # shell — zsh / fish / etc can't see bash functions defined in
       # nix-develop bash, but everything in `packages` is on $PATH.
       claude = pkgs.writeShellScriptBin "claude" ''
         set -euo pipefail
-        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        ${configDirSetup}
         export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
         touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
@@ -122,7 +151,7 @@ let
 
       jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
         set -euo pipefail
-        export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
+        ${configDirSetup}
         export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
         touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"

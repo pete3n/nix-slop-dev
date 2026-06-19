@@ -135,6 +135,68 @@ let
       };
     };
 
+    # Slice-21 follow-up (Linux-parity zero-touch apps): the apps' jail
+    # is built with `projectName = "__SLOP_ENV_PROJECT_NAME__"` (the
+    # placeholder default in lib/slop-env/darwin.nix). That placeholder
+    # ends up baked into every SBPL allow under cfgDir via
+    # shared.mkJailCombinators (`/projects/__SLOP_ENV_PROJECT_NAME__/…`).
+    # The wrapper sed-substitutes it at runtime with the basename of
+    # $PWD (or $NIX_SLOP_DEV_PROJECT_NAME if set) — mirrors Linux's
+    # placeholderPreamble in lib/slop-env/linux.nix.
+    #
+    # Pattern MUST be anchored on `/projects/` so write-text source
+    # store names (which embed the placeholder as
+    # `-projects-__SLOP_ENV_PROJECT_NAME__-`) are not mangled —
+    # see [[project-jail-nix-placeholder-substitution]] for the
+    # canonical regression from Linux commit 4c3b2a6.
+    testJailWrapperSedSubstitutesProjectNamePlaceholder = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            hostResolve = [ ];
+            mainBin = "/nix/store/fake/bin/project-name-sed";
+          };
+        };
+        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+      in {
+        # The substitution is present and anchored on `/projects/` so it
+        # only touches destination paths in the SBPL — write-text source
+        # store names (dash-separated) are not in the match window.
+        hasAnchoredProjectNameSub = lib.hasInfix
+          ''-e "s|/projects/__SLOP_ENV_PROJECT_NAME__|/projects/''${_project_name}|g"''
+          pipeline;
+        # Existing subs survive — project-name is additive, not a
+        # replacement for the static jail subs.
+        hasProxyPortSub = lib.hasInfix
+          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+        hasJailCwdSub = lib.hasInfix
+          ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
+      };
+      expected = {
+        hasAnchoredProjectNameSub = true;
+        hasProxyPortSub = true;
+        hasJailCwdSub = true;
+      };
+    };
+
+    # Slice-21 follow-up: in no-jail (network-only) mode the SBPL
+    # template carries no projectName placeholder — there are no
+    # combinator-emitted allows. The pipeline must not emit a dead
+    # project-name sub. Anti-test against a regression that always
+    # emits the sub regardless of mode.
+    testNoJailWrapperSedPipelineHasNoProjectNameSub = {
+      expr = let
+        pipeline = render.mkProfileSedPipeline { };
+      in !(lib.hasInfix "__SLOP_ENV_PROJECT_NAME__" pipeline);
+      expected = true;
+    };
+
     # Slice 4: preflight. When the wrapper is built with a jail, every
     # snippet in jailData.preflight runs before sandbox-exec. Each snippet
     # is one bash line; failures abort the wrapper because the surrounding
@@ -172,6 +234,72 @@ let
     testPreflightBlockEmptyWhenNoJail = {
       expr = render.mkPreflightBlock { };
       expected = "";
+    };
+
+    # Slice-21 follow-up (preflight surface): the apps' zero-touch jail
+    # bakes __SLOP_ENV_PROJECT_NAME__ into preflight snippets via
+    # shared.mkJailCombinators's cfgDir (mkdir/ln-sfn destinations).
+    # The SBPL sed pipeline (slice 1) only substitutes inside the
+    # SBPL profile — preflight runs on the host filesystem BEFORE
+    # sandbox-exec, so without an eval-time rewrite the apps would
+    # create `~/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/`
+    # literally on the host.
+    #
+    # Fix: rewrite `/projects/__SLOP_ENV_PROJECT_NAME__` → `/projects/${_project_name}`
+    # at Nix-eval time. Bash expands ${_project_name} at runtime
+    # against the value the wrapper computes (slice 1's wiring). Same
+    # `/projects/` anchor as the SBPL sed pipeline so write-text
+    # source store names (dash-separated) survive untouched.
+    testPreflightBlockSubstitutesProjectNamePlaceholder = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [
+              ''mkdir -p "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
+              ''ln -sfn "/nix/store/abc-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md" "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/CLAUDE.md"''
+            ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            mainBin = "/nix/store/fake/bin/preflight-placeholder";
+          };
+        };
+      in render.mkPreflightBlock { jail = fakeJail; };
+      expected = ''
+        mkdir -p "$HOME/.local/state/claude/projects/''${_project_name}"
+        ln -sfn "/nix/store/abc-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md" "$HOME/.local/state/claude/projects/''${_project_name}/CLAUDE.md"
+      '';
+    };
+
+    # Slice-21 follow-up anti-test: snippets that don't carry the
+    # placeholder must pass through byte-for-byte. Pins the rewrite to
+    # the anchored `/projects/__SLOP_ENV_PROJECT_NAME__` form so a
+    # future broader pattern can't silently rewrite unrelated bash
+    # (combinator-emitted preflight lines that mention only host paths
+    # like /etc/* or /usr/* should be untouched).
+    testPreflightBlockLeavesNonPlaceholderSnippetsByteEqual = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [
+              ''mkdir -p "/Users/x/scratch"''
+              ''ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"''
+            ];
+            cleanup = [ ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            mainBin = "/nix/store/fake/bin/preflight-no-placeholder";
+          };
+        };
+      in render.mkPreflightBlock { jail = fakeJail; };
+      expected = ''
+        mkdir -p "/Users/x/scratch"
+        ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"
+      '';
     };
 
     # Slice 4: empty preflight list (a jail with zero combinators that
@@ -250,6 +378,67 @@ let
             ''rm -f "/Users/x/scratch/file"'' block));
       in rmFIdx < rmRfIdx;
       expected = true;
+    };
+
+    # Slice-21 follow-up (cleanup surface): mirrors the preflight
+    # rewrite — cleanup snippets that rm-f / rm-rf the per-project
+    # cfgDir carry the placeholder; eval-time rewrite to ${_project_name}
+    # so bash teardown targets the same directory that preflight
+    # created. Without this, the cleanup would rm-rf the literal
+    # `__SLOP_ENV_PROJECT_NAME__` dir (which preflight no longer
+    # creates after slice 2's preflight fix) and silently leak the
+    # real per-project dir.
+    #
+    # Cleanup order is REVERSED relative to preflight (LIFO per the
+    # lib/jail contract); the rewrite applies AFTER reversal, so the
+    # expected output reflects reverse-merge order.
+    testCleanupBlockSubstitutesProjectNamePlaceholder = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [
+              ''rm -rf "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
+              ''rm -f "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/settings.json"''
+            ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            mainBin = "/nix/store/fake/bin/cleanup-placeholder";
+          };
+        };
+      in render.mkCleanupBlock { jail = fakeJail; };
+      expected = ''
+        rm -f "$HOME/.local/state/claude/projects/''${_project_name}/settings.json"
+        rm -rf "$HOME/.local/state/claude/projects/''${_project_name}"
+      '';
+    };
+
+    # Slice-21 follow-up: anti-test mirroring the preflight version.
+    # Cleanup snippets that don't reference cfgDir (e.g., generic tmpfs
+    # teardown under /tmp/...) must pass through byte-for-byte.
+    testCleanupBlockLeavesNonPlaceholderSnippetsByteEqual = {
+      expr = let
+        fakeJail = {
+          jailData = {
+            sbpl = "";
+            preflight = [ ];
+            cleanup = [
+              ''rm -rf "/tmp/some-tmpfs"''
+              ''rm -f "/Users/x/.cache/foo"''
+            ];
+            env = { };
+            envForward = [ ];
+            binPaths = [ ];
+            mainBin = "/nix/store/fake/bin/cleanup-no-placeholder";
+          };
+        };
+      in render.mkCleanupBlock { jail = fakeJail; };
+      expected = ''
+        rm -f "/Users/x/.cache/foo"
+        rm -rf "/tmp/some-tmpfs"
+      '';
     };
 
     # Slice 5: no jail → empty cleanup block. The network-only wrapper
@@ -664,11 +853,63 @@ let
   };
 
   failures = lib.runTests tests;
+
+  # Slice-21 follow-up behaviour test: run the actual sed pipeline
+  # against a fixture SBPL that carries the placeholder in BOTH forms
+  # — destination paths (`/projects/__SLOP_ENV_PROJECT_NAME__/…`) AND
+  # dash-form write-text store names
+  # (`-projects-__SLOP_ENV_PROJECT_NAME__-…`). The pure pipeline test
+  # above pins the anchored pattern in the rendered string; this one
+  # pins sed's BEHAVIOUR against the canonical regression from
+  # [[project-jail-nix-placeholder-substitution]]: a broad
+  # `s|PLACEHOLDER|RESOLVED|g` would mangle the store name and bwrap /
+  # sandbox-exec would deny the read.
+  anchorFakeJail = {
+    jailData = {
+      sbpl = ""; preflight = [ ]; cleanup = [ ];
+      env = { }; envForward = [ ]; binPaths = [ ]; hostResolve = [ ];
+      mainBin = "/nix/store/fake/bin/anchor-behaviour";
+    };
+  };
+  anchorPipeline = render.mkProfileSedPipeline { jail = anchorFakeJail; };
 in
-if failures == [ ] then
+if failures != [ ] then
+  throw "sandboxed-darwin tests failed:\n${builtins.toJSON failures}"
+else
   pkgs.runCommand "sandboxed-darwin-tests" { } ''
-    echo "all sandboxed-darwin tests passed"
+    cat > fixture.sbpl <<'SBPL_EOF'
+    (allow file-read* (literal "/Users/x/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/CLAUDE.md"))
+    (allow file-read* (subpath "/nix/store/0000000000000000000000000000000000-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md"))
+    SBPL_EOF
+
+    # The pipeline references bash vars the real wrapper sets at
+    # invocation; for this behaviour test only `_project_name` matters
+    # (the fixture has no __PROXYPORT__ / __JAIL_CWD__ / __JAIL_HOME__
+    # tokens, so those subs are no-ops). Set them anyway so the splice
+    # never expands to an empty argument.
+    _proxy_port=0
+    _jail_cwd=/tmp
+    HOME=/tmp
+    _project_name=myproj
+    ${pkgs.gnused}/bin/sed ${anchorPipeline} fixture.sbpl > out.sbpl
+
+    # Destination form: must be substituted with the resolved name.
+    if ! ${pkgs.gnugrep}/bin/grep -q '/projects/myproj/CLAUDE.md' out.sbpl; then
+      echo "FAIL: anchored sed did not substitute the destination path" >&2
+      cat out.sbpl >&2
+      exit 1
+    fi
+
+    # Dash-form store name: MUST survive verbatim. A broad pattern
+    # would rewrite this to `-projects-myproj-CLAUDE.md`, breaking the
+    # SBPL allow for the (real, on-disk) write-text artifact whose
+    # store path was hashed with the placeholder baked in.
+    if ! ${pkgs.gnugrep}/bin/grep -q -- '-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md' out.sbpl; then
+      echo "FAIL: anchored sed mangled the dash-form write-text store name" >&2
+      cat out.sbpl >&2
+      exit 1
+    fi
+
+    echo "all sandboxed-darwin tests passed (incl. anchor behaviour)"
     touch $out
   ''
-else
-  throw "sandboxed-darwin tests failed:\n${builtins.toJSON failures}"

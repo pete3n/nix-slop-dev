@@ -111,6 +111,38 @@
               inherit (pkgs) lib;
             };
 
+            # Slice-21 follow-up: zero-touch apps on Darwin. Asserts the
+            # claude / jail-shell launchers compute PROJECT_NAME and
+            # export NIX_SLOP_DEV_PROJECT_NAME so the per-jail wrapper's
+            # SBPL/preflight sed (slices 1+2) targets the right cfgDir.
+            # Mirrors Linux's apps-jail-has-placeholder check at the
+            # launcher layer.
+            slop-env-darwin = import ./tests/slop-env-darwin.nix {
+              inherit pkgs self;
+              inherit (pkgs) lib;
+            };
+
+            # Slice-21 follow-up: Darwin parallel of Linux's
+            # apps-jail-has-placeholder (flake.nix's Linux branch). The
+            # placeholder must survive into the materialised per-jail
+            # wrapper — without it, slice 1's sed pattern has nothing to
+            # match and the apps silently break for any non-template
+            # invocation. Greps the SBPL sed pipeline's match pattern
+            # via the rendered sandboxed-jailed-claude wrapper.
+            apps-darwin-jail-has-placeholder =
+              let
+                bins = (self.lib.slopEnv pkgs).mkBins { };
+                sandboxedClaudeWrapper = builtins.head bins.sandboxedPackages;
+              in
+              pkgs.runCommand "apps-darwin-jail-has-placeholder" { } ''
+                if ! ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' \
+                     ${sandboxedClaudeWrapper}/bin/sandboxed-jailed-claude; then
+                  echo "expected __SLOP_ENV_PROJECT_NAME__ in sandboxed-jailed-claude wrapper" >&2
+                  exit 1
+                fi
+                echo "ok" > $out
+              '';
+
             lib-slop-env-shape =
               if slopActual == slopExpected then
                 pkgs.runCommand "lib-slop-env-shape" { } ''

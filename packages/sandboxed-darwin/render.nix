@@ -27,6 +27,18 @@ let
       mid = lib.removeSuffix "__"
         (lib.removePrefix "__JAIL_HOST_RESOLVE_" entry.placeholder);
     in lib.toLower mid;
+
+  # Slice-21 follow-up: rewrite the project-name placeholder inside
+  # bash snippets emitted by the jail's preflight/cleanup combinators
+  # so they target the per-invocation cfgDir at runtime. Anchored on
+  # `/projects/` (same rule as the SBPL sed pipeline) — see
+  # [[project-jail-nix-placeholder-substitution]]: write-text source
+  # store names embed the placeholder as `-projects-PLACEHOLDER-`
+  # (dash-separated) and must NOT be rewritten or `ln -sfn` would
+  # point at a non-existent store path.
+  rewriteProjectNamePlaceholder = lib.replaceStrings
+    [ "/projects/__SLOP_ENV_PROJECT_NAME__" ]
+    [ "/projects/\${_project_name}" ];
 in
 {
   combinedSbplTemplate = { jail ? null }:
@@ -66,7 +78,9 @@ in
   # pre-issue-11 shape in that mode.
   mkPreflightBlock = { jail ? null }:
     if jail != null && jail ? jailData && jail.jailData.preflight != [ ]
-    then lib.concatMapStrings (line: line + "\n") jail.jailData.preflight
+    then lib.concatMapStrings
+      (line: rewriteProjectNamePlaceholder line + "\n")
+      jail.jailData.preflight
     else "";
 
   # Concatenates `jailData.cleanup` snippets in REVERSE order (LIFO via
@@ -82,7 +96,8 @@ in
   # are torn down). Same empty-string contract as mkPreflightBlock.
   mkCleanupBlock = { jail ? null }:
     if jail != null && jail ? jailData && jail.jailData.cleanup != [ ]
-    then lib.concatMapStrings (line: line + "\n")
+    then lib.concatMapStrings
+      (line: rewriteProjectNamePlaceholder line + "\n")
       (lib.reverseList jail.jailData.cleanup)
     else "";
 
@@ -183,6 +198,14 @@ in
       staticJailSubs = lib.optionals hasJail [
         ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"''
         ''-e "s|__JAIL_HOME__|''${HOME}|g"''
+        # Slice-21 follow-up: zero-touch apps build the jail with
+        # `projectName = "__SLOP_ENV_PROJECT_NAME__"`; the SBPL's
+        # cfgDir allows carry the literal placeholder. Anchored on
+        # `/projects/` so write-text source store names (which embed
+        # the placeholder as `-projects-PLACEHOLDER-`, no slashes)
+        # survive the substitution. Mirrors Linux's slice-18 fix at
+        # commit 4c3b2a6.
+        ''-e "s|/projects/__SLOP_ENV_PROJECT_NAME__|/projects/''${_project_name}|g"''
       ];
       hostResolveSubs = lib.optionals hasJail
         (map (entry:
