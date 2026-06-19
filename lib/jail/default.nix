@@ -245,18 +245,32 @@ let
       '';
     };
 
-    # Grants the filesystem reads a network-using process needs on macOS.
-    # The Sandbox boundary (ADR-0003: proxy + Seatbelt loopback pin) governs
-    # outbound traffic on its own; this combinator does not emit any
-    # network-outbound rules. macOS DNS lookup reads /etc/resolv.conf and
-    # /etc/hosts (canonical: /private/etc); both are regular files, hence
-    # (literal …). TLS trust roots are at /System/Library/Keychains (already
-    # in the ADR-0004 prelude); Nix-built tools that bundle their own cacert
+    # Grants the filesystem reads a network-using process needs on macOS,
+    # plus loopback-only network-bind + network-inbound for processes
+    # that need to receive an inbound connection (e.g. claude-code's
+    # OAuth callback server). The Sandbox boundary (ADR-0003: proxy +
+    # Seatbelt loopback pin) governs outbound traffic on its own; this
+    # combinator does not emit any network-outbound rules. macOS DNS
+    # lookup reads /etc/resolv.conf and /etc/hosts (canonical:
+    # /private/etc); both are regular files, hence (literal …). TLS
+    # trust roots are at /System/Library/Keychains (already in the
+    # ADR-0004 prelude); Nix-built tools that bundle their own cacert
     # get /nix/store reads via add-pkg-deps (slice 8).
+    #
+    # network-bind + network-inbound (BOTH required for a TCP server
+    # on Seatbelt — bind alone covers bind(), accept() needs inbound).
+    # Scope must be `localhost` (or `*`) — Apple's Seatbelt parser
+    # rejects literal IPv4/IPv6 addresses in `(local ip "...")` with
+    # `sandbox-exec: host must be * or localhost in network address`
+    # (HITL 2026-06-19 confirmed this constraint). `localhost` is
+    # Apple-resolved against the kernel's sockaddr, so a single rule
+    # covers both 127.0.0.1 and ::1 loopback bindings.
     network = emptySlice // {
       sbpl = ''
         (allow file-read* (literal "/private/etc/resolv.conf"))
         (allow file-read* (literal "/private/etc/hosts"))
+        (allow network-bind (local ip "localhost:*"))
+        (allow network-inbound (local ip "localhost:*"))
       '';
     };
 
@@ -367,6 +381,30 @@ let
         '';
         preflight = [ ''mkdir -p "${shellPath}"'' ];
         cleanup = [ ''rm -rf "${shellPath}"'' ];
+      };
+
+    # tmpfs's persistent sibling. Same SBPL allows, same mkdir
+    # preflight, but no cleanup — the directory survives the jail's
+    # exit. On Linux, tmpfs is a real namespace-local mount, so its
+    # cleanup is a host no-op; on Seatbelt our tmpfs `rm -rf`s the
+    # actual host directory, which destroys any persistent state the
+    # jailed process wrote inside it (claude's .claude.json,
+    # sessions, history). ensure-dir is the right combinator for
+    # cfgDir-style paths that must persist across runs.
+    # HITL 2026-06-19 surfaced this when a second `nix run #claude`
+    # invocation hit "JSON Parse error: Unexpected EOF" because the
+    # prior run's _cleanup trap had rm-rf'd the entire cfgDir.
+    ensure-dir = path:
+      let
+        sbplPath = renderSbplPath path;
+        shellPath = renderShellPath path;
+      in emptySlice // {
+        sbpl = ''
+          (allow file-read* (subpath "${sbplPath}"))
+          (allow file-write* (subpath "${sbplPath}"))
+          (allow process-exec (subpath "${sbplPath}"))
+        '';
+        preflight = [ ''mkdir -p "${shellPath}"'' ];
       };
 
     # Materialises `content` to a content-addressed file in the Nix

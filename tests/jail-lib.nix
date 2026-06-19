@@ -14,7 +14,7 @@
 let
   jailLib = import ../lib/jail { inherit lib pkgs; };
   inherit (jailLib) emptySlice mergeSlices combinators prelude jail;
-  inherit (combinators) set-env time-zone network no-new-session ro-bind rw-bind mount-cwd noescape tmpfs write-text try-readwrite try-fwd-env add-pkg-deps host-resolve;
+  inherit (combinators) set-env time-zone network no-new-session ro-bind rw-bind mount-cwd noescape tmpfs ensure-dir write-text try-readwrite try-fwd-env add-pkg-deps host-resolve;
 
   tests = {
     # Slice 1 tracer: set-env is the simplest combinator. No SBPL emission
@@ -91,11 +91,24 @@ let
     # ADR-0004 prelude); Nix-built tools that need ca-bundle.crt get it
     # via add-pkg-deps on cacert (slice 8). Both files are emitted as
     # (literal …) — they are single regular files, not directories.
-    testNetworkEmitsDnsAllows = {
+    testNetworkEmitsDnsAndLoopbackBindAllows = {
       expr = network.sbpl;
+      # HITL 2026-06-19: claude-code's OAuth flow spins up a local
+      # callback server to receive the auth code redirect. Seatbelt
+      # requires BOTH network-bind (for the bind syscall) and
+      # network-inbound (for accept after listen) — bind alone isn't
+      # enough.
+      #
+      # Scope must be `localhost` — Apple's Seatbelt parser rejects
+      # literal IPv4/IPv6 forms with `sandbox-exec: host must be * or
+      # localhost in network address`. `localhost` resolves Apple-side
+      # against the kernel's sockaddr so it matches both 127.0.0.1 and
+      # ::1 loopback bindings without needing per-family rules.
       expected = ''
         (allow file-read* (literal "/private/etc/resolv.conf"))
         (allow file-read* (literal "/private/etc/hosts"))
+        (allow network-bind (local ip "localhost:*"))
+        (allow network-inbound (local ip "localhost:*"))
       '';
     };
 
@@ -480,6 +493,53 @@ let
         '';
         preflight = [ ''mkdir -p "$HOME/.config/claude-code-jailed"'' ];
         cleanup = [ ''rm -rf "$HOME/.config/claude-code-jailed"'' ];
+      };
+    };
+
+    # HITL 2026-06-19: `ensure-dir` is tmpfs's persistent sibling —
+    # same SBPL allows, same mkdir preflight, but NO rm-rf cleanup.
+    # The cfgDir on Darwin can't be a real tmpfs (Seatbelt has no
+    # mount namespaces); tmpfs's cleanup wipes legitimate claude
+    # state (.claude.json, sessions, history) across runs.
+    # `ensure-dir` keeps the host dir between invocations so claude's
+    # zero-touch apps mode can build persistent per-project state.
+    # Linux callers stay on tmpfs (jail-nix's namespace-local tmpfs
+    # already gives the right semantics).
+    testEnsureDirEmitsMkdirPreflightAndReadWriteSbplWithoutCleanup = {
+      expr = let slice = ensure-dir "/Users/x/persistent"; in {
+        inherit (slice) sbpl preflight cleanup;
+      };
+      expected = {
+        sbpl = ''
+          (allow file-read* (subpath "/Users/x/persistent"))
+          (allow file-write* (subpath "/Users/x/persistent"))
+          (allow process-exec (subpath "/Users/x/persistent"))
+        '';
+        preflight = [ ''mkdir -p "/Users/x/persistent"'' ];
+        cleanup = [ ];
+      };
+    };
+
+    # HITL 2026-06-19: ensure-dir mirrors tmpfs's noescape handling
+    # so the same `(noescape "~/...")` pattern shared.mkJailCombinators
+    # uses for cfgDir flows through correctly — bash sees $HOME in
+    # preflight, SBPL sees the __JAIL_HOME__ placeholder for the
+    # wrapper to sed-substitute. Anti-test against a copy-paste bug
+    # where ensure-dir uses the SBPL renderer in preflight (would
+    # rm-rf `__JAIL_HOME__/...` literally — silent no-op, file would
+    # persist but be in the wrong place).
+    testEnsureDirNoEscapeUsesHomeInShellAndPlaceholderInSbpl = {
+      expr = let slice = ensure-dir (noescape "~/.local/state/claude/projects/test"); in {
+        inherit (slice) sbpl preflight cleanup;
+      };
+      expected = {
+        sbpl = ''
+          (allow file-read* (subpath "__JAIL_HOME__/.local/state/claude/projects/test"))
+          (allow file-write* (subpath "__JAIL_HOME__/.local/state/claude/projects/test"))
+          (allow process-exec (subpath "__JAIL_HOME__/.local/state/claude/projects/test"))
+        '';
+        preflight = [ ''mkdir -p "$HOME/.local/state/claude/projects/test"'' ];
+        cleanup = [ ];
       };
     };
 

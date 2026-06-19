@@ -79,12 +79,25 @@ rec {
       # namespace; Darwin's /usr/bin is SIP-protected so the binding's
       # source is the literal /usr/bin/env on the host (slice 21).
       envSrc ? "${pkgs.coreutils}/bin/env"
+    , # cfgDir lifecycle combinator. Linux uses jail-nix's tmpfs (a
+      # real namespace-local mount — the host's cfgDir is shadowed,
+      # not modified, so cleanup-on-exit is a host no-op). Darwin's
+      # local tmpfs `rm -rf`s the actual host dir at trap-exit, which
+      # destroys claude's persistent state (.claude.json, sessions,
+      # history) between runs. Darwin overrides with `ensure-dir`
+      # (mkdir-only, no cleanup); Linux keeps the tmpfs default.
+      # HITL 2026-06-19.
+      cfgDirCombinator ? null
     ,
     }:
     let
       sharedDir = "~/.local/state/claude/shared";
       cfgDir = "~/.local/state/claude/projects/${projectName}";
       c = jail.combinators;
+      cfgDirInit =
+        if cfgDirCombinator != null
+        then cfgDirCombinator (c.noescape cfgDir)
+        else c.tmpfs (c.noescape cfgDir);
     in
     with c;
     [
@@ -95,8 +108,10 @@ rec {
 
       (ro-bind envSrc "/usr/bin/env")
 
-      # Ephemeral config dir; project-fixed content written on top.
-      (tmpfs (noescape cfgDir))
+      # Per-project config dir. Linux gets jail-nix's tmpfs (in-
+      # namespace ephemeral); Darwin gets ensure-dir (host-
+      # persistent) via the cfgDirCombinator parameter.
+      cfgDirInit
     ]
     # Skills dir is the per-project starting bundle. Apps' zero-touch
     # path leaves it null (no project-specific skills) — slice 18 spec

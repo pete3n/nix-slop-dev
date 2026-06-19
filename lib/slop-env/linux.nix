@@ -54,11 +54,15 @@ let
       usesPlaceholder = projectName == projectNamePlaceholder;
 
       # First-run state dir + credential bootstrap. Idempotent on every
-      # invocation. Matches today's shellHook (slice 18.3).
+      # invocation. Matches today's shellHook (slice 18.3). `.claude.json`
+      # is initialised with `{}` (not bare `touch`) so claude doesn't
+      # hit "JSON Parse error: Unexpected EOF" on first read — HITL
+      # 2026-06-19.
       bootstrapBlock = ''
         CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
       '';
 
       # Per-invocation projectName resolution + sed-substitution of the
@@ -108,14 +112,14 @@ let
         if usesPlaceholder then ''
           set -euo pipefail
           ${placeholderPreamble "${jailedClaude}/bin/jailed-claude"}
-          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
             -e CLAUDE_CONFIG_DIR \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             "$SLOP_LAUNCHER" "$@"
         '' else ''
           set -euo pipefail
           ${concretePreamble}
-          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+          exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
             -e CLAUDE_CONFIG_DIR \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             ${jailedClaude}/bin/jailed-claude "$@"
@@ -149,7 +153,8 @@ let
           export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
           export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
           mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-          touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+          touch "$CLAUDE_SHARED_DIR/.credentials.json"
+          [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
           # Setup checks
           _setup_ok=1
@@ -174,8 +179,9 @@ let
           # Jailed Claude Code
           claude() {
           	mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-          	touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
-          	sandboxed -q --allow api.anthropic.com --allow 2607:6bc0::/32 \
+          	touch "$CLAUDE_SHARED_DIR/.credentials.json"
+          	[ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+          	sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
           		-e CLAUDE_CONFIG_DIR \
           		${lib.concatMapStrings (v: "-e ${v} \\\n\t\t") extraSandboxedEnvForwards}setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
           }

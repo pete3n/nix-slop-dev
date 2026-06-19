@@ -75,6 +75,20 @@ let
         # switch — set it so the jail shell starts cleanly without
         # the closed-by-default deny on the set-environment path.
         (set-env "__NIX_DARWIN_SET_ENVIRONMENT_DONE" "1")
+
+        # claude-code (Bun) spawns /usr/bin/security to read OAuth
+        # credentials from the macOS keychain (and to store new ones
+        # after first-run OAuth). Without an exec allow Bun surfaces
+        # the Seatbelt deny as a hard EPERM rather than falling back
+        # to the plaintext .credentials.json provider — the jail
+        # then can't reach the keychain layer Apple stores
+        # claude.ai's OAuth token under. src == dst because /usr/bin
+        # is SIP-protected and the binary lives at its canonical
+        # path on every macOS host (stock and nix-darwin alike). The
+        # ro-bind emits both file-read* and process-exec subpath
+        # allows — exactly what claude needs.
+        # HITL surfaced 2026-06-19.
+        (ro-bind "/usr/bin/security" "/usr/bin/security")
       ];
 
       jailCombinators =
@@ -84,6 +98,11 @@ let
           # the same host path (the jail's read-allow emits with no bind
           # preflight when src == dst).
           envSrc = "/usr/bin/env";
+          # Darwin's local tmpfs is destructive (rm-rf the host dir on
+          # exit) — wrong semantics for cfgDir, which must persist
+          # claude state across runs. ensure-dir keeps the dir between
+          # invocations. HITL 2026-06-19.
+          cfgDirCombinator = jail.combinators.ensure-dir;
         })
         ++ darwinJailExtras
         ++ extraCombinators;
@@ -143,8 +162,11 @@ let
         ${configDirSetup}
         export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
-        exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q --allow api.anthropic.com \
+        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+        exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q \
+          --allow api.anthropic.com \
+          --allow platform.claude.com \
           -e CLAUDE_CONFIG_DIR \
           ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}"$@"
       '';
@@ -154,7 +176,8 @@ let
         ${configDirSetup}
         export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedShell}/bin/sandboxed-jailed-shell "$@"
       '';
 
@@ -166,7 +189,8 @@ let
         export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
         export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
         mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
         # Setup checks
         _setup_ok=1
