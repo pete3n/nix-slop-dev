@@ -471,7 +471,7 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			-v _key="''${AUDIT_KEY}" \
     			-v _allowed_re="''${allowed_re}" \
     		'
-    		function emit(    _msg) {
+    		function emit(    _msg, _dst, _port) {
     			if (_evt_key != _key) return
     			# Audit rule already filters at the kernel level
     			# (success=0 + per-session key); everything reaching emit()
@@ -480,10 +480,24 @@ pkgs.writeShellScriptBin "sandboxed" # bash
     			# targets and must not be filtered out by an exe path check.
     			if (_evt_saddr != "" && _evt_saddr ~ _allowed_re) return
 
+    			# Extract destination IP and port for the banner, so the user
+    			# can tell which connect attempt was flagged. When SOCKADDR
+    			# wasn't recorded for this event (some failed connects), fall
+    			# back to "unknown" rather than omit the line.
+    			if (_evt_saddr != "") {
+    				_dst  = _evt_saddr; gsub(/.*laddr=/, "", _dst);  gsub(/ .*/,      "", _dst)
+    				_port = _evt_saddr; gsub(/.*lport=/, "", _port); gsub(/[^0-9].*/, "", _port)
+    				if (_dst == "")  _dst  = "unknown"
+    				if (_port == "") _port = "?"
+    			} else {
+    				_dst = "unknown"; _port = "?"
+    			}
+
     			_msg = "\r\n\033[1;31m╔══ SANDBOX VIOLATION ══════════════════════════════════════╗\033[0m\r\n" \
     						"\033[1;31m║\033[0m  key:  " _key "\r\n" \
     						"\033[1;31m║\033[0m  time: " _evt_time "\r\n" \
     						"\033[1;31m║\033[0m  proc: " _evt_comm " (pid " _evt_pid ")\r\n" \
+    						"\033[1;31m║\033[0m  dest: " _dst ":" _port "\r\n" \
     						"\033[1;31m║\033[0m  exe:  " _evt_exe "\r\n" \
     						"\033[1;31m╚═══════════════════════════════════════════════════════════╝\033[0m\r\n"
     			printf "%s", _msg
