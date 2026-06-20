@@ -105,7 +105,11 @@ auditd_install_cmd() {
 	distro_id="$1"
 	case "$distro_id" in
 		ubuntu | debian)
-			printf 'apt-get install -y auditd\n'
+			# `apt-get update` first: minimal cloud images ship an empty package
+			# index, so a bare `install` fails with "Unable to locate package".
+			# The compound command is run via `sh -c` (see default.nix), so the
+			# `&&` is honoured rather than passed as a literal argument.
+			printf 'apt-get update && apt-get install -y auditd\n'
 			;;
 		fedora)
 			printf 'dnf install -y audit\n'
