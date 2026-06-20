@@ -81,9 +81,14 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		# A literal `?` means stat couldn't read the context — treat as
     		# "unprobed" so the check / apply behave the same as a missing
     		# nix binary, rather than falsely green-lighting any non-empty
-    		# string. Important when /usr/bin/stat is missing or built
-    		# without SELinux support on some unusual host.
-    		[ "$nix_store_label" = "?" ] && nix_store_label=""
+    		# string. Must use `if/then` not `[ … ] && …` — the latter
+    		# returns nonzero when the test fails, which is fatal under
+    		# `set -eu` in the surrounding wrapper (Fedora 44 HITL after
+    		# f4da496: caused every setup-linux invocation to exit 1
+    		# silently before printing any plan or prereq lines).
+    		if [ "$nix_store_label" = "?" ]; then
+    			nix_store_label=""
+    		fi
     	fi
     }
 

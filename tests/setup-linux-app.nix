@@ -19,7 +19,7 @@ pkgs.runCommand "setup-linux-app-tests" { } ''
     || fail "check mode must exit 0 or 1, got $status; output:
 $report"
 
-  for label in "systemd" "cgroup v2" "auditd" "sudoers" "user namespaces"; do
+  for label in "systemd" "cgroup v2" "auditd" "sudoers" "user namespaces" "SELinux"; do
     case "$report" in
       *"$label"*) ;;
       *) fail "report missing '$label' line; output:

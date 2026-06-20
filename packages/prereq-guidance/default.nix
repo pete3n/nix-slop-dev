@@ -162,7 +162,12 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     			# setup-linux's _collect_selinux_facts.
     			nix_store_label="$(/usr/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
     				| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
-    			[ "$nix_store_label" = "?" ] && nix_store_label=""
+    			# Use `if/then` (not `[ … ] && …`): the latter returns
+    			# nonzero when the test fails, fatal under `set -e` in
+    			# callers. Symmetry with setup-linux's _collect_selinux_facts.
+    			if [ "$nix_store_label" = "?" ]; then
+    				nix_store_label=""
+    			fi
     		fi
     	else
     		nix_store_label="$nix_store_label_override"
