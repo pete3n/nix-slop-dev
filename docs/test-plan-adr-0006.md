@@ -29,17 +29,18 @@ that can reach it.
 
 | # | Invariant | Oracle check | NixOS | Distro VM | macOS |
 |---|---|---|---|---|---|
-| 1 | deny-closed (no data transfers) | `net-deny` | ✅ | 🟡 | ✅ |
-| 2 | allow-connects | `net-allow` | ✅ | 🟡 | ✅ |
-| 3 | violation recorded | `violation-logged` | ✅ (auditd) | 🟡 (auditd) | ✅ (proxy/unified log) |
-| 4 | confined-out path invisible | `path-hidden` | ✅ | 🟡 | ✅ |
-| 5 | project dir read-write | `path-rw` | ✅ | 🟡 | ✅ |
-| 6 | host binary cannot be executed | `no-host-bin` | ✅ | 🟡 | ✅ |
+| 1 | deny-closed (no data transfers) | `net-deny` | ✅ | ✅ | ✅ |
+| 2 | allow-connects | `net-allow` | ✅ | ✅ | ✅ |
+| 3 | violation recorded | `violation-logged` | ✅ (auditd) | ✅ (auditd) | ✅ (proxy/unified log) |
+| 4 | confined-out path invisible | `path-hidden` | ✅ | ✅ | ✅ |
+| 5 | project dir read-write | `path-rw` | ✅ | ✅ | ✅ |
+| 6 | host binary cannot be executed | `no-host-bin` | ✅ | ✅ | ✅ |
 
 - **NixOS** ✅: invariants 1/2/3 in `tests/sandbox-functional.nix`; 4/5/6 in
   `tests/jail-functional.nix`. Both are `functionalTests.x86_64-linux.*`.
-- **Distro VM** 🟡: all six in `ci/distro-guest-test.sh` (driven by
-  `ci/distro-e2e.sh`). Implemented, never executed — gated on `DISTRO_E2E_READY`.
+- **Distro VM** ✅: all six in `ci/distro-guest-test.sh` (driven by
+  `ci/distro-e2e.sh`), **green on Debian, Ubuntu, and Fedora** (Fedora under
+  SELinux Enforcing). Ready to flip `DISTRO_E2E_READY`.
 - **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**.
   Ready to flip `MACOS_FUNCTIONAL_READY` to un-gate the CI job.
 
@@ -92,7 +93,7 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 - **Side finding**: exposed and fixed a latent NAT-IP bug shared with
   `sandbox-functional.nix` — see §5.
 
-### 4.2 Validate + green the distro harness  🟡 needs KVM + network
+### 4.2 Validate + green the distro harness  ✅ DONE (Debian, Ubuntu, Fedora)
 - **Behaviour**: the universal six hold on a real Debian/Ubuntu/Fedora host after
   `setup-linux --apply` — i.e. the generated sudoers / auditd / SELinux / AppArmor
   config actually loads and enforcement then holds (the HITL-2026-06-19 bug class
@@ -206,10 +207,16 @@ Honest status, because "implemented" ≠ "observed enforcing":
   `net-deny-udp` and the reworked `no-host-bin`). Two bugs were found and fixed
   during validation (the UDP `exec`/`read -t` issues; the `</dev/null` exec
   probe). Ready to flip `MACOS_FUNCTIONAL_READY`.
-- **Distro harness** — fully written but **not yet executed on real infra**;
-  gated on `DISTRO_E2E_READY` (slice 4.2).
-- **No ADR-named behaviour is unbacked, and the macOS layer is verified.** What
-  remains is the distro harness (4.2) and the optional macOS slices 4.4/4.5.
+- **Distro harness** — ✅ **green on Debian, Ubuntu, and Fedora** (Fedora under
+  SELinux Enforcing; the `--apply`-generated sudoers/auditd/SELinux config loads
+  and enforcement holds — the HITL-2026-06-19 bug class). Six issues were fixed
+  during validation: apt-on-Nix host deps, Fedora image-URL drift, `apt-get
+  update` before auditd (a real `setup-linux` bug), the SELinux 203/EXEC from a
+  `$HOME` oracle path, and the `auditctl -h` sudoers-probe false negative. Ready
+  to flip `DISTRO_E2E_READY`.
+- **Both functional harnesses are now verified on real hardware.** What remains
+  is only the optional macOS slices 4.4 (`--wl-add` no-live-effect) and 4.5
+  (creds-persist) — no unbacked ADR behaviour, no unexecuted harness.
 
 ## 7. Resolved finding — `no-host-bin` now tests executability, not PATH presence
 
