@@ -127,13 +127,18 @@ jobs:
         run: bash ci/distro-e2e.sh ${{ matrix.distro }}
 
   macos:
-    name: macOS functional
-    # Validated on a real mac (aarch64-darwin, ci/macos-functional.sh), so this
-    # runs by default on merge/nightly/tag/dispatch. Kill switch: set the repo
-    # variable MACOS_FUNCTIONAL_READY=false to disable (e.g. if it goes flaky on
-    # the GitHub-hosted runner); unset or any other value runs it.
+    name: macOS functional (${{ matrix.os }})
+    # Runs by default (kill switch MACOS_FUNCTIONAL_READY=false). Tested on a
+    # macOS version matrix so Seatbelt-behaviour drift between releases is
+    # caught (ADR-0003: sandbox-exec is deprecated). macos-15 (Sequoia) is
+    # green; macos-26 (Tahoe) currently fails net-allow on aarch64 — under
+    # investigation (ci/macos-functional.sh diagnose_allow).
     if: vars.MACOS_FUNCTIONAL_READY != 'false'
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -142,6 +147,19 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
+
+      # The macos-26 runner drops loopback TCP to the test stub/proxy
+      # (net-allow times out; the host can't reach its own stub). The macOS
+      # Application Firewall is the prime suspect and is irrelevant to what we
+      # test (a hermetic loopback boundary), so record its state and disable it.
+      # Harmless on runners where it was already off.
+      - name: disable macOS Application Firewall
+        run: |
+          fw=/usr/libexec/ApplicationFirewall/socketfilterfw
+          echo "before:"; sudo "$fw" --getglobalstate --getstealthmode || true
+          sudo "$fw" --setglobalstate off || true
+          sudo "$fw" --setstealthmode off || true
+          echo "after:";  sudo "$fw" --getglobalstate --getstealthmode || true
 
       # The mac runner IS the Darwin host — no nested VM. Builds the Darwin
       # Slop Env, stands up a loopback stub, and runs the shared oracle under

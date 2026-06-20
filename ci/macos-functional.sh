@@ -78,6 +78,27 @@ while True:
 UDP_PID=$!
 trap 'kill "$STUB_PID" "$UDP_PID" 2>/dev/null || true' EXIT INT TERM
 
+# Readiness gate: the loopback stub must accept connections from the HOST
+# (unconfined) before any check runs. On the aarch64 macos-26 runner it never
+# came up — net-allow then fails and is misread as a boundary break, when the
+# truth is "no stub". Fail fast with the cause (stub log, python, listeners,
+# firewall state) instead of a misleading boundary verdict.
+stub_up=0
+attempt=0
+while [ "$attempt" -lt 20 ]; do
+  if curl -sf --max-time 2 "$STUB_URL" >/dev/null 2>&1; then stub_up=1; break; fi
+  sleep 0.5
+  attempt=$((attempt + 1))
+done
+if [ "$stub_up" -ne 1 ]; then
+  echo "::error::loopback stub $STUB_URL never came up — CI infra problem, not a boundary result" >&2
+  echo "## stub.log";    cat "$STUBDIR/stub.log" 2>/dev/null || true
+  echo "## python3";     command -v python3 || true; python3 --version 2>&1 || true
+  echo "## listeners";   { lsof -nP -iTCP:"$STUB_PORT" 2>/dev/null; netstat -an 2>/dev/null | grep -w "$STUB_PORT"; } || true
+  echo "## firewall";    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate --getstealthmode 2>/dev/null || true
+  exit 1
+fi
+
 # Plant a host secret OUTSIDE the jail's curated view.
 SECRET="$HOME/.ssh/id_secret"
 mkdir -p "$HOME/.ssh"
@@ -96,13 +117,36 @@ check() {
   if "$@"; then echo "PASS $name"; else echo "FAIL $name"; fail=1; fi
 }
 
+# Dump runner-specific state when net-allow fails. net-allow uses ALL_PROXY
+# (socks5h) for the http:// stub — curl ignores the uppercase HTTP_PROXY for
+# http URLs (httpoxy), so the path is: agent -> SOCKS5 proxy -> whitelisted
+# host. This is green on x86_64-darwin and on the aarch64 macos-15 runner but
+# fails on the aarch64 macos-26 runner, so capture arch/OS, stub liveness, the
+# jail proxy env, a verbose curl through the proxy, and the proxy's own
+# forward/deny log to show which leg broke. Only runs on failure.
+diagnose_allow() {
+  printf '\n----- net-allow failure diagnostics -----\n'
+  echo "## arch / macOS"; uname -m; sw_vers 2>/dev/null || true
+  echo "## stub reachable from the host (unconfined)?"
+  curl -sS --max-time 5 "$STUB_URL" || echo "(host itself cannot reach the stub)"
+  echo "## stub listener"; lsof -nP -iTCP:"$STUB_PORT" -sTCP:LISTEN 2>/dev/null || true
+  echo "## jail proxy env"; "$JS" -q -a "$STUB_IP" -- -c 'env | grep -iE proxy' || true
+  echo "## verbose curl through the proxy (whitelisted)"
+  "$JS" -q -a "$STUB_IP" -- -c "curl -v -sS --max-time 8 '$STUB_URL'" 2>&1 || true
+  echo "## proxy forward/deny log"; "$JS" --log 2>&1 | tail -n 30 || true
+  printf -- '----- end diagnostics -----\n'
+}
+
 # --- universal six ---
 # #1 deny-closed: curl via proxy to a NON-whitelisted host → proxy refuses.
 check net-deny "$JS" -q -- -c "slop-oracle net-deny '$STUB_URL'"
 # #3 violation-recorded: the proxy logged the whitelist miss (run UNCONFINED).
 check violation-logged env "SLOP_LOG_CMD=$JS --log" "$ORACLE_HOST" violation-logged "$STUB_IP"
-# #2 allow-connects: with -a, the proxy forwards to the stub.
+# #2 allow-connects: with -a, the proxy forwards to the stub. On failure, dump
+# runner-specific diagnostics (the aarch64 macos-26 case — see diagnose_allow).
+fail_before=$fail
 check net-allow "$JS" -q -a "$STUB_IP" -- -c "slop-oracle net-allow '$STUB_URL'"
+if [ "$fail" -ne "$fail_before" ]; then diagnose_allow; fi
 # #4/#5/#6 jail boundary.
 check jail "$JS" -q -- -c \
   "slop-oracle path-rw '$WORK' && slop-oracle path-hidden '$SECRET' && slop-oracle no-host-bin sudo"
