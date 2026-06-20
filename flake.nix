@@ -341,6 +341,34 @@
               inherit pkgs;
             };
 
+            # ADR-0006 consequence: the roadmap skeletons (opencode, pi-agent)
+            # stay UN-EXPORTED (absent from the flake `templates` output) and
+            # STILL PARSE, until they are promoted to real templates. A cheap
+            # eval guard so a skeleton can neither rot into a parse error
+            # unnoticed nor be shipped before it is ready. `import` parses the
+            # whole file and returns its builder function; forcing to a lambda
+            # (isFunction) proves it parses without evaluating the heavy body
+            # (which needs inputs/pkgs/makeNix* it is never given here).
+            roadmap-skeletons-guarded =
+              let
+                skeletons = {
+                  opencode = ./templates/opencode/opencode.nix;
+                  pi-agent = ./templates/pi-agent/pi-agent.nix;
+                };
+                names = builtins.attrNames skeletons;
+                exportedTemplates = builtins.attrNames self.templates;
+                exported = builtins.filter (name: builtins.elem name exportedTemplates) names;
+                unparsable = builtins.filter (name: !(builtins.isFunction (import skeletons.${name}))) names;
+              in
+              if exported != [ ] then
+                throw "roadmap skeleton(s) unexpectedly exported in flake `templates`: ${builtins.concatStringsSep " " exported}"
+              else if unparsable != [ ] then
+                throw "roadmap skeleton(s) no longer parse as a builder function: ${builtins.concatStringsSep " " unparsable}"
+              else
+                pkgs.runCommand "roadmap-skeletons-guarded" { } ''
+                  echo "roadmap skeletons un-exported and still parse: ${builtins.concatStringsSep " " names}" > $out
+                '';
+
             # Slice 19.2: mkBins/mkShell accept extraShellHook (string) that
             # the lib appends to its emitted shellHook. The nvim template
             # uses this for .luarc.json symlinking, swap-dir reset, and the

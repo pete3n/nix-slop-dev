@@ -100,7 +100,8 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 |---|---|
 | Eval gate (`pr-checks.yml`) | real |
 | NixOS functional: `wl-live-update` | real, hermetic, **verified green on a KVM builder** |
-| NixOS functional: `sandbox`, `jail`, `template` | real, hermetic; `sandbox` NAT-IP bug fixed (needs a confirming run — see below) |
+| NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
+| NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
 | Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | implemented, **awaits one-time KVM validation**, gated |
 | macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | implemented, **awaits one-time mac validation**, gated |
 

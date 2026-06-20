@@ -68,7 +68,7 @@ These are the per-platform additions ADR-0006 calls out explicitly.
 | Exported templates tested functionally, not just drv byte-eq | `template-functional.nix` (both templates' jails + nvim tooling on PATH) | ✅ |
 | nvim template asserts lua tooling / headless plumbing in jail | `template-functional.nix` (`lua-language-server`/`stylua`/`busted`) | ✅ |
 | Template composition pinned by byte-equality | `template-claude-code-drv.nix`, `template-nvim-dev-drv.nix`, `template-default-config-matches-lib.nix` | ✅ |
-| Roadmap skeletons (`opencode`, `pi-agent`) guarded by a cheap "still un-exported / still parses" eval check | — (`templates/opencode/` exists, no check references it) | 🔴 **gap** — see slice 4.7 |
+| Roadmap skeletons (`opencode`, `pi-agent`) guarded by a cheap "still un-exported / still parses" eval check | `checks.*.roadmap-skeletons-guarded` (inline in `flake.nix`) | ✅ |
 | Oracle + shims are a one-place maintenance surface | adding a platform = a new shim; invariant edits are one-place | ✅ (by construction) |
 
 ## 4. TDD slices (ordered red→green units)
@@ -123,13 +123,18 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 - **Interface**: a `net-deny-udp` oracle check parallel to `net-deny-raw`, wired
   into `macos-functional.sh`. Bonus belt-and-suspenders on Linux.
 
-### 4.7 Roadmap-skeleton eval guard  ✅ hermetic
-- **Behaviour**: `opencode` (and future `pi-agent`) skeletons stay **un-exported**
-  and **still parse** — exactly the cheap guard ADR consequence #3 promises but
-  that does not yet exist.
-- **Interface**: an eval `check` that (a) asserts the skeleton is absent from
-  `templates`/`apps` exports and (b) `builtins.tryEval`-parses its `.nix`.
-  Hermetic → red→green here.
+### 4.7 Roadmap-skeleton eval guard  ✅ DONE (green, teeth-proven)
+- **Behaviour**: `opencode` and `pi-agent` skeletons stay **un-exported** (absent
+  from the flake `templates` output) and **still parse** — the cheap guard ADR
+  consequence #3 promised but that did not exist.
+- **Covered by**: `checks.<system>.roadmap-skeletons-guarded` (inline in
+  `flake.nix`, Linux branch). Asserts neither name is in `self.templates`, and
+  that `import` of each `.nix` yields a builder function (`isFunction` forces a
+  parse without evaluating the heavy body).
+- **Result**: GREEN on the real repo. Both halves were verified to have teeth by
+  temporarily (a) injecting an exported name → throws "unexpectedly exported",
+  and (b) pointing a skeleton at a non-function `.nix` → throws "no longer parse
+  as a builder function". Hermetic eval check — no VM.
 
 ### 4.8 aarch64 functional smoke  (optional, deferred by ADR)
 - ADR-0006 keeps aarch64 eval-only. Promote to a single deny-closed + jail-launch
@@ -151,8 +156,9 @@ Honest status, because "implemented" ≠ "observed enforcing":
 - **Distro + macOS harnesses** — fully written but **never executed on real
   infra**; both gated. Their oracle assertions *are* the failing tests; making
   them pass on real hardware is slices 4.2/4.3.
-- **Two confirmed code/ADR gaps** still open: the roadmap-skeleton guard (4.7)
-  and macOS UDP (4.6) are named by ADR-0006 but backed by no test.
+- **Remaining no-test gap**: macOS UDP fail-closed (4.6) is named by ADR-0006 but
+  backed by no test (needs a real mac). The roadmap-skeleton guard (4.7) is now
+  closed by `roadmap-skeletons-guarded`.
 
 ## 6. Adding an invariant
 
