@@ -148,3 +148,59 @@ jobs:
       # the sandboxed-jailed wrapper so Seatbelt actually enforces.
       - name: macOS functional
         run: bash ci/macos-functional.sh
+
+  badges:
+    name: status badges
+    # Publishes per-platform functional status to the `badges` branch as
+    # shields.io endpoint JSON, which the README renders. Runs after the
+    # functional jobs regardless of their outcome (always()), and ONLY from
+    # main — so a feature-branch dispatch can't overwrite the project's
+    # canonical status. The branch is force-pushed each run (a generated
+    # artifact, not history) using the workflow's own GITHUB_TOKEN — no extra
+    # secret. Do not hand-edit the `badges` branch.
+    needs: [nixos, templates, distros, macos]
+    if: ${{ always() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: render + publish per-platform badge JSON
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RESULT_NIXOS: ${{ needs.nixos.result }}
+          RESULT_TEMPLATES: ${{ needs.templates.result }}
+          RESULT_DISTROS: ${{ needs.distros.result }}
+          RESULT_MACOS: ${{ needs.macos.result }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+
+          # Map a GitHub job result to a shields.io endpoint badge body.
+          emit() {
+            local name="$1" result="$2" message color
+            case "$result" in
+              success)    message=passing;   color=brightgreen ;;
+              failure)    message=failing;   color=red ;;
+              cancelled)  message=cancelled; color=yellow ;;
+              skipped|"") message=skipped;   color=lightgrey ;;
+              *)          message="$result"; color=lightgrey ;;
+            esac
+            printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"%s"}\n' \
+              "$name" "$message" "$color" >"$work/$name.json"
+          }
+          emit nixos     "$RESULT_NIXOS"
+          emit templates "$RESULT_TEMPLATES"
+          emit distros   "$RESULT_DISTROS"
+          emit macos     "$RESULT_MACOS"
+
+          # Force-push the JSON onto an orphan `badges` branch — regenerated
+          # each run, so no history accumulates.
+          cd "$work"
+          git init -q -b badges
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -q -m "ci: update functional status badges [skip ci]"
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" badges
