@@ -1,0 +1,58 @@
+# Eval/contract layer — the PR gate (ADR-0006).
+#
+# `nix flake check` builds the cheap, hermetic checks (lib-shape contracts,
+# the Seatbelt-profile / jail-combinator generators, the Go sandbox-proxy
+# unit tests, the setup-linux fixture sims, template drv byte-equality). It
+# runs natively per system so every platform's checks are actually realised,
+# not just cross-evaluated.
+#
+# The functional layer is deliberately a SEPARATE flake output
+# (`functionalTests`, not `checks`), so `nix flake check` here never boots a
+# VM — that keeps the PR gate fast. The heavy functional matrix lives in
+# functional.yml and runs on merge/nightly instead.
+name: pr-checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake-check:
+    name: nix flake check (${{ matrix.system }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runs-on: ubuntu-latest
+          - system: aarch64-linux
+            # GitHub-hosted arm64. Swap for a self-hosted label
+            # (e.g. [self-hosted, linux, arm64]) if you run your own builder.
+            runs-on: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runs-on: macos-14
+          # x86_64-darwin (Intel) — uncomment if you still ship it.
+          # - system: x86_64-darwin
+          #   runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # Builds every derivation under `checks.${system}` for this runner's
+      # system and cross-evaluates the others, failing on the first eval or
+      # build regression. Does NOT touch `functionalTests` (custom output).
+      - name: nix flake check
+        run: nix flake check -L

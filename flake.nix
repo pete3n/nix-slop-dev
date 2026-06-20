@@ -54,6 +54,15 @@
             sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
             setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
             prereq-guidance = pkgs.callPackage ./packages/prereq-guidance/default.nix { };
+            # The functional oracle as a /nix/store binary. The distro e2e
+            # harness runs it under `sandboxed` (a systemd-run transient unit);
+            # on Fedora SELinux the unit's init_t cannot execve a $HOME script
+            # (user_home_t), only store binaries (bin_t after the --apply
+            # relabel). Running the store-built oracle matches both the product
+            # (agents live in /nix/store) and the NixOS test's writeShellScriptBin.
+            slop-oracle = pkgs.writeShellScriptBin "slop-oracle" (
+              builtins.readFile ./tests/oracle/slop-oracle.sh
+            );
             default = self.packages.${system}.sandboxed;
           }
         else
@@ -341,6 +350,34 @@
               inherit pkgs;
             };
 
+            # ADR-0006 consequence: the roadmap skeletons (opencode, pi-agent)
+            # stay UN-EXPORTED (absent from the flake `templates` output) and
+            # STILL PARSE, until they are promoted to real templates. A cheap
+            # eval guard so a skeleton can neither rot into a parse error
+            # unnoticed nor be shipped before it is ready. `import` parses the
+            # whole file and returns its builder function; forcing to a lambda
+            # (isFunction) proves it parses without evaluating the heavy body
+            # (which needs inputs/pkgs/makeNix* it is never given here).
+            roadmap-skeletons-guarded =
+              let
+                skeletons = {
+                  opencode = ./templates/opencode/opencode.nix;
+                  pi-agent = ./templates/pi-agent/pi-agent.nix;
+                };
+                names = builtins.attrNames skeletons;
+                exportedTemplates = builtins.attrNames self.templates;
+                exported = builtins.filter (name: builtins.elem name exportedTemplates) names;
+                unparsable = builtins.filter (name: !(builtins.isFunction (import skeletons.${name}))) names;
+              in
+              if exported != [ ] then
+                throw "roadmap skeleton(s) unexpectedly exported in flake `templates`: ${builtins.concatStringsSep " " exported}"
+              else if unparsable != [ ] then
+                throw "roadmap skeleton(s) no longer parse as a builder function: ${builtins.concatStringsSep " " unparsable}"
+              else
+                pkgs.runCommand "roadmap-skeletons-guarded" { } ''
+                  echo "roadmap skeletons un-exported and still parse: ${builtins.concatStringsSep " " names}" > $out
+                '';
+
             # Slice 19.2: mkBins/mkShell accept extraShellHook (string) that
             # the lib appends to its emitted shellHook. The nvim template
             # uses this for .luarc.json symlinking, swap-dir reset, and the
@@ -455,6 +492,80 @@
             else
               { }
           )
+      );
+
+      # Functional test layer (ADR-0006). Kept OUT of `checks` so that a
+      # bare `nix flake check` on a PR runner stays eval-only and fast — these
+      # boot a KVM guest and exercise real enforcement. The merge/nightly
+      # workflow builds them explicitly:
+      #   nix build .#functionalTests.x86_64-linux.sandbox
+      # x86_64-linux only: the enforcement primitives (systemd IPAddressDeny,
+      # bubblewrap, auditd) are arch-independent, so aarch64 stays eval-level.
+      functionalTests = {
+        x86_64-linux = {
+          # Sandbox (network) boundary: deny-closed, allow-connects,
+          # violation-recorded, plus whitelist persistence. First member of
+          # the layer; the Jail-boundary nixosTest is the planned second.
+          sandbox = import ./tests/sandbox-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
+
+          # The `--wl-add` LIVE-UPDATE half (ADR-0006 slice 4.1): a host denied
+          # at launch becomes reachable from inside the SAME still-running
+          # sandbox unit after `sandboxed --wl-add` set-property's it — the
+          # runtime counterpart to sandbox-functional.nix's persistence half.
+          wl-live-update = import ./tests/sandbox-wl-live-update.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
+
+          # Jail (filesystem) boundary: path-hidden, project-rw,
+          # host-binary-absent. Drives the raw bubblewrap launcher via
+          # `jailed-shell -c` with the oracle on the jail PATH.
+          jail = import ./tests/jail-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+
+          # Exported templates compose an enforcing jail carrying their
+          # configured tooling. Reconstructs each template's jail from its real
+          # config via the lib (faithful per the byte-eq checks), then runs the
+          # oracle inside it. The nvim arm also asserts its lua tooling /
+          # headless plumbing is on the jail PATH.
+          template = import ./tests/template-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+        };
+      }
+      # Darwin: no VM-test framework, so the macOS functional harness
+      # (ci/macos-functional.sh) runs on a real mac. It needs the shared
+      # oracle to run INSIDE the real Seatbelt jail, so we expose the default
+      # `jail-shell` rebuilt with curl + the oracle added to projectPkgs
+      # (curl is not in defaultBasePkgs). The harness builds this and drives
+      # it as `jail-shell [-a host] -- -c '<oracle ...>'`. Mirrors the oracle
+      # injection in tests/jail-functional.nix.
+      // nixpkgs.lib.genAttrs darwinSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          probeOracle = pkgs.writeShellScriptBin "slop-oracle" (
+            builtins.readFile ./tests/oracle/slop-oracle.sh
+          );
+        in
+        {
+          probe-jail-shell =
+            (
+              (self.lib.slopEnv pkgs).mkBins {
+                projectName = "macos-functional";
+                projectPkgs = [
+                  pkgs.curl
+                  probeOracle
+                ];
+              }
+            ).jail-shell;
+        }
       );
 
       # Slice 18: zero-touch entry points for existing-Nix-flake users.

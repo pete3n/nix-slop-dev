@@ -245,7 +245,10 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     			printf >&2 'setup-linux: unsupported distro %s — install auditd manually.\n' "$distro_id"
     			exit 1
     		fi
-    		sudo $install_cmd
+    		# Run via `sh -c` so a compound install command (e.g. Debian's
+    		# `apt-get update && apt-get install …`) is parsed as a shell pipeline
+    		# rather than word-split into literal args.
+    		sudo sh -c "$install_cmd"
     		sudo systemctl enable --now auditd
     	fi
 
