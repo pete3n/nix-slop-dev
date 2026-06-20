@@ -126,6 +126,21 @@ jobs:
       - name: distro end-to-end
         run: bash ci/distro-e2e.sh ${{ matrix.distro }}
 
+      # Each distro is badged separately (their confinement primitives differ:
+      # Ubuntu AppArmor, Fedora SELinux, Debian neither), so an aggregate would
+      # hide which one regressed. matrix-leg results aren't individually visible
+      # via `needs`, so upload this leg's outcome for the badges job to read.
+      - name: record status
+        if: always()
+        run: printf '%s' '${{ job.status }}' > "${{ matrix.distro }}.status"
+      - name: upload status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: status-${{ matrix.distro }}
+          path: ${{ matrix.distro }}.status
+          retention-days: 1
+
   macos:
     name: macOS functional (${{ matrix.os }})
     # Runs by default (kill switch MACOS_FUNCTIONAL_READY=false). Tested on a
@@ -182,13 +197,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Per-distro status comes from the artifacts each distro leg uploaded
+      # (matrix-leg results aren't individually visible via `needs`). Best
+      # effort: if the distros job was disabled, no artifacts exist.
+      - name: download per-distro status
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: status-*
+          path: status
+          merge-multiple: true
+
       - name: render + publish per-platform badge JSON
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RESULT_NIXOS: ${{ needs.nixos.result }}
           RESULT_TEMPLATES: ${{ needs.templates.result }}
-          RESULT_DISTROS: ${{ needs.distros.result }}
           RESULT_MACOS: ${{ needs.macos.result }}
         run: |
           set -euo pipefail
@@ -209,8 +235,12 @@ jobs:
           }
           emit nixos     "$RESULT_NIXOS"
           emit templates "$RESULT_TEMPLATES"
-          emit distros   "$RESULT_DISTROS"
           emit macos     "$RESULT_MACOS"
+          # One badge per distro. "skipped" if the distros job was disabled
+          # (DISTRO_E2E_READY) and uploaded no status artifact.
+          for distro in debian ubuntu fedora; do
+            emit "$distro" "$(cat "status/$distro.status" 2>/dev/null || echo skipped)"
+          done
 
           # Force-push the JSON onto an orphan `badges` branch — regenerated
           # each run, so no history accumulates.
