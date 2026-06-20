@@ -59,7 +59,7 @@ In-env checks (run inside the Slop Env):
   net-deny-udp <host> <port> a UDP datagram to an echo stub fails closed
   path-hidden  <path>        a confined-out path is not readable
   path-rw      <dir>         the project dir accepts create+read+delete
-  no-host-bin  <name>        a host binary is absent from the confined PATH
+  no-host-bin  <name>        a host binary cannot be executed (absent, or exec-denied)
 
 Host checks (run outside, after a confined run):
   violation-logged <pattern>   \$SLOP_LOG_CMD output contains a block for <pattern>
@@ -172,11 +172,32 @@ check_path_rw() {
 }
 
 check_no_host_bin() {
-	local name=$1
-	if command -v -- "$name" >/dev/null 2>&1; then
-		fail no-host-bin "$name is on PATH inside the jail — host binary leaked"
+	# Invariant #6: a host privilege tool cannot be EXECUTED inside the jail.
+	# One invariant, two enforcement models (ADR-0006, encoded once): Linux
+	# bubblewrap omits the binary from the curated mounts (absent from PATH),
+	# while the macOS Seatbelt jail leaves it *visible* but denies process-exec
+	# for any path not opted in (ADR-0004 / issue 15). So PATH presence alone is
+	# NOT a leak on macOS — actually running it must fail. We therefore test
+	# executability, not mere presence.
+	local name=$1 path out rc
+	path=$(command -v -- "$name" 2>/dev/null || true)
+	if [ -z "$path" ]; then
+		pass no-host-bin "$name absent from the confined PATH — cannot execute"
 	fi
-	pass no-host-bin "$name absent from the confined PATH"
+	# Present on PATH: attempt a harmless exec (--version: no escalation, no
+	# prompt; </dev/null so a stray stdin read cannot hang). A refused exec —
+	# rc 126/127, or a sandbox/loader "operation not permitted" / "permission
+	# denied" — is confined; the program actually running is the leak.
+	out=$("$path" --version </dev/null 2>&1)
+	rc=$?
+	case "$rc" in
+		126 | 127) pass no-host-bin "$name on PATH but exec refused (rc $rc) — confined" ;;
+	esac
+	case "$out" in
+		*"peration not permitted"* | *"ermission denied"*)
+			pass no-host-bin "$name on PATH but exec denied by the sandbox — confined" ;;
+	esac
+	fail no-host-bin "$name executed inside the jail (rc $rc) — host binary leaked"
 }
 
 check_violation_logged() {

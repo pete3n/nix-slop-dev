@@ -41,7 +41,7 @@ between platforms.
 | `violation-logged <pattern>` | #3 violation recorded | host (post-run) |
 | `path-hidden <path>` | #4 confined-out path invisible | in-env |
 | `path-rw <dir>` | #5 project dir read-write | in-env |
-| `no-host-bin <name>` | #6 host binary absent from jail PATH | in-env |
+| `no-host-bin <name>` | #6 host binary cannot be executed (absent on Linux; present but exec-denied on macOS) | in-env |
 
 Env knobs: `SLOP_NET_TIMEOUT`, `SLOP_LOG_CMD`, `SLOP_LOG_RETRIES`,
 `SLOP_LOG_RETRY_DELAY`. `net-deny` deliberately requires a failed *data
@@ -104,7 +104,7 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
 | NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
 | Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | implemented, **awaits one-time KVM validation**, gated |
-| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | run once on aarch64-darwin: all pass **except `no-host-bin sudo`** (jail leaks sudo on PATH — see the test plan's open finding). Stays gated until resolved. |
+| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | run once on aarch64-darwin: all pass; the lone `no-host-bin sudo` failure was a wrong test (sudo is exec-denied, not a leak) and is **fixed** — needs one confirming run, then flip `MACOS_FUNCTIONAL_READY`. |
 
 ## First-run validation playbook (for the next agent)
 

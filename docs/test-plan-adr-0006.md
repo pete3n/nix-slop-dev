@@ -174,38 +174,38 @@ Honest status, because "implemented" ≠ "observed enforcing":
   (distro harness 4.2, the rest of the macOS run 4.4/4.5) — plus the open finding
   below.
 
-## 7. Open finding — macOS jail leaks `sudo` on PATH (invariant #6)
+## 7. Resolved finding — `no-host-bin` now tests executability, not PATH presence
 
 First-run of `ci/macos-functional.sh` on aarch64-darwin passed every check
-**except** invariant #6:
+**except** invariant #6 (`FAIL no-host-bin: sudo is on PATH …`). Investigation
+(static + on-mac probes) showed this was **not a confinement leak** but a wrong
+test:
 
-```
-FAIL no-host-bin: sudo is on PATH inside the jail — host binary leaked
-```
+- `/usr/bin/sudo` is *visible* on PATH because the macOS jail allows
+  `file-read-metadata` over `/`, but **executing it is denied** — the jail's
+  `process-exec` is an opt-in per-path allowlist (only `/usr/bin/env` + bound
+  combinator paths; ADR-0004 / issue 15). On-mac: `sudo` → `Operation not
+  permitted`, rc 126, no escalation. `/bin/ls` likewise denied; `/usr/bin/env`
+  allowed. So the macOS jail enforces its design exactly.
+- The oracle's `no-host-bin` tested **PATH presence** (`command -v`), which is the
+  Linux-bubblewrap shape (binary genuinely absent) and the wrong question on
+  macOS. The true cross-platform invariant is *"a host privilege tool cannot be
+  executed"* — satisfied two ways (Linux: absent, rc 127; macOS: exec-denied,
+  rc 126).
 
-This is structural, not a flake: the macOS Sandbox/Jail profile is `(allow
-default)` with targeted denies (ADR-0004 read-confinement), so `/usr/bin/sudo`
-stays readable/executable and on PATH — whereas the Linux bubblewrap jail
-*curates* mounts so host binaries are simply absent. It is exactly the
-"one invariant, two enforcement models that diverge" risk ADR-0006 set out to
-contain. It currently **blocks `MACOS_FUNCTIONAL_READY`** (the jail check, and
-thus the whole script, exits non-zero).
+**Resolution (Option A, implemented):** `check_no_host_bin` now asserts
+**executability**, not presence — PASS if the name is absent from PATH *or*
+present-but-exec-refused (rc 126/127 or a sandbox "operation not permitted" /
+"permission denied"), FAIL only if the binary actually runs. Linux behaviour is
+unchanged (sudo is absent → the same PASS); macOS now PASSes correctly. Validated
+on Linux across all three branches (absent → PASS; runnable `env` → FAIL-leaked;
+present-but-non-exec, rc 126 → PASS, mimicking the macOS denial).
 
-Two ways to resolve, a decision for the maintainer (not yet actioned):
-
-- **(A) invariant #6 is Linux-shaped.** On macOS the equivalent guarantee is
-  "sensitive host *paths* are unreadable" (already asserted by `path-hidden`) and
-  "no non-proxy egress" — not "host binary absent from PATH". If so, the macOS
-  jail check should drop `no-host-bin sudo` (or replace it with a macOS-meaningful
-  exec/escalation assertion), and the divergence should be documented.
-- **(B) real hardening gap.** If an agent reaching `/usr/bin/sudo` inside the
-  Jail is considered a genuine confinement weakness, the Seatbelt jail fragment
-  should deny exec of host privilege tools — a production change with its own
-  test.
-
-Until decided, the macOS harness stays gated. Everything else in the macOS run
+**Status:** with this fix the macOS run should be all-green; a confirming
+`ci/macos-functional.sh` run is the last step before flipping
+`MACOS_FUNCTIONAL_READY`. Everything else in the first run already passed
 (`net-deny`, `violation-logged`, `net-allow`, `path-rw`, `path-hidden`,
-`net-deny-raw`, `net-deny-udp`, `tmpdir-redirect`, `wl-add-persists`) passed.
+`net-deny-raw`, `net-deny-udp`, `tmpdir-redirect`, `wl-add-persists`).
 
 ## 6. Adding an invariant
 
