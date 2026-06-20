@@ -209,6 +209,30 @@
                 ''
               else
                 throw "darwin creds regression: checksConfigDir=${pkgs.lib.boolToString checksConfigDir} noSharedCredCheck=${pkgs.lib.boolToString noSharedCredCheck} noCredSymlink=${pkgs.lib.boolToString noCredSymlink}";
+
+            # Regression (HITL 2026-06-19): the jail launches via
+            # `/usr/bin/env -i` (drops TMPDIR) and `(deny default)` blocks
+            # /tmp, so without redirection the agent's Node tooling EPERMs
+            # creating its temp dir under os.tmpdir()=/tmp. The launchers
+            # point TMPDIR into the writable cfgDir and the jail forwards it
+            # in. Pin both halves: the launcher redirect and the forward.
+            darwin-tmpdir-redirected =
+              let
+                bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
+                forwardsTmpdir = builtins.elem "TMPDIR" bins.jailedClaude.jailData.envForward;
+              in
+              if forwardsTmpdir then
+                pkgs.runCommand "darwin-tmpdir-redirected" { } ''
+                  launcher=${bins.claude}/bin/claude
+                  if ! ${pkgs.gnugrep}/bin/grep -qF 'export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"' "$launcher"; then
+                    echo "FAIL: claude launcher doesn't redirect TMPDIR into cfgDir — agent temp would hit jail-denied /tmp" >&2
+                    cat "$launcher" >&2
+                    exit 1
+                  fi
+                  echo "TMPDIR redirected into cfgDir and forwarded into the jail" > $out
+                ''
+              else
+                throw "darwin TMPDIR regression: jail does not forward TMPDIR into the sandbox (env -i would drop it)";
           }
         else
           let

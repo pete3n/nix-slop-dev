@@ -76,6 +76,15 @@ let
         # the closed-by-default deny on the set-environment path.
         (set-env "__NIX_DARWIN_SET_ENVIRONMENT_DONE" "1")
 
+        # The jail launches via `/usr/bin/env -i`, which drops TMPDIR, so
+        # claude-code's Node os.tmpdir() falls back to /tmp — blocked by
+        # `(deny default)`, surfacing as EPERM when the agent's tooling
+        # creates its temp dir (e.g. the Bash tool's worker). The launchers
+        # export TMPDIR into the writable cfgDir; forward it through so
+        # os.tmpdir() lands inside the sandbox's existing writable set (no
+        # new path opened). HITL 2026-06-19.
+        (try-fwd-env "TMPDIR")
+
         # claude-code (Bun) spawns /usr/bin/security to read OAuth
         # credentials from the macOS keychain (and to store new ones
         # after first-run OAuth). Without an exec allow Bun surfaces
@@ -164,7 +173,12 @@ let
       claude = pkgs.writeShellScriptBin "claude" ''
         set -euo pipefail
         ${configDirSetup}
-        mkdir -p "$CLAUDE_CONFIG_DIR"
+        # Keep agent scratch inside the writable cfgDir — the jail denies
+        # /tmp and `env -i` drops TMPDIR, so Node's os.tmpdir() would EPERM
+        # there (forwarded via try-fwd-env in darwinJailExtras).
+        # HITL 2026-06-19.
+        export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q \
           --allow api.anthropic.com \
@@ -176,7 +190,12 @@ let
       jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
         set -euo pipefail
         ${configDirSetup}
-        mkdir -p "$CLAUDE_CONFIG_DIR"
+        # Keep agent scratch inside the writable cfgDir — the jail denies
+        # /tmp and `env -i` drops TMPDIR, so Node's os.tmpdir() would EPERM
+        # there (forwarded via try-fwd-env in darwinJailExtras).
+        # HITL 2026-06-19.
+        export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedShell}/bin/sandboxed-jailed-shell "$@"
       '';
