@@ -152,19 +152,23 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     	fi
     	if [ "$nix_store_label_override" = "__unset__" ]; then
     		nix_store_label=""
-    		_nix_bin="$(command -v nix 2>/dev/null || true)"
-    		if [ -n "$_nix_bin" ]; then
-    			_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
+    		# Probe `${pkgs.util-linux}/bin/setpriv` directly — NOT `command
+    		# -v nix`. Determinate Systems' Nix installer ships an SELinux
+    		# module that pre-labels `nix` specifically, which would make
+    		# a `nix`-targeted probe falsely green-light /nix/store even
+    		# when the rest of the store is default_t. setpriv is the exact
+    		# binary the wrapper hands to systemd-run, so its label is what
+    		# actually determines whether the wrapper works. Symmetry with
+    		# setup-linux's _collect_selinux_facts.
+    		_selinux_probe_target="${pkgs.util-linux}/bin/setpriv"
+    		if [ -e "$_selinux_probe_target" ]; then
     			# `/usr/bin/stat` (host's GNU stat, built with --enable-selinux
     			# on Fedora/RHEL/Debian) returns the real context; nixpkgs's
-    			# coreutils stat is built without SELinux and returns `?`,
-    			# which would silently green-light the check. Symmetry with
-    			# setup-linux's _collect_selinux_facts.
-    			nix_store_label="$(/usr/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    			# coreutils stat is built without SELinux and returns `?`.
+    			nix_store_label="$(/usr/bin/stat -c '%C' "$_selinux_probe_target" 2>/dev/null \
     				| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
-    			# Use `if/then` (not `[ … ] && …`): the latter returns
-    			# nonzero when the test fails, fatal under `set -e` in
-    			# callers. Symmetry with setup-linux's _collect_selinux_facts.
+    			# `if/then`, not `[ … ] && …`: latter returns nonzero on
+    			# false, fatal under set -e in callers.
     			if [ "$nix_store_label" = "?" ]; then
     				nix_store_label=""
     			fi

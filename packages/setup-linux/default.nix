@@ -58,34 +58,44 @@ pkgs.writeShellScriptBin "setup-linux" # bash
 
     # SELinux fact collection. Two facts feed check_selinux_nix_label:
     # `getenforce` (Enforcing / Permissive / Disabled / "" when absent) and
-    # the SELinux *type* of a known /nix/store binary (default_t when no
-    # fcontext rule exists, bin_t / usr_t after apply mode installs the
-    # /usr→/nix equivalence). `cut -d: -f3` extracts the type field from a
-    # system_u:object_r:<type>:s0 context.
+    # the SELinux *type* of the wrapper's setpriv binary (default_t when
+    # /nix/store hasn't been relabeled, bin_t / usr_t after apply mode
+    # installs the /usr→/nix equivalence + restorecon). `cut -d: -f3`
+    # extracts the type field from a system_u:object_r:<type>:s0 context.
     #
-    # `/usr/bin/stat` is the host's GNU stat, which Fedora/RHEL/Debian build
-    # with `--enable-selinux` so `%C` returns the real context. The nixpkgs
-    # coreutils we'd otherwise reach via `${"$"}{pkgs.coreutils}/bin/stat` is
-    # built without SELinux support and returns the string literal `?` —
-    # silently turning the check green and the apply into a no-op on Fedora
-    # (HITL 2026-06-19, fix follow-up to caa2cf4). We've already relied on
-    # the host tool chain for `getenforce`, so this is consistent.
+    # Probe target is `${pkgs.util-linux}/bin/setpriv` deliberately — NOT
+    # `command -v nix`. The Determinate Systems Nix installer ships an
+    # SELinux module that pre-labels the `nix` binary specifically (so the
+    # daemon's exec works), which would make a `nix`-targeted probe report
+    # bin_t even when the rest of /nix/store is default_t. setpriv is the
+    # exact path the sandboxed wrapper hands to systemd-run's ExecStart, so
+    # its label is the only one that actually determines whether the wrapper
+    # works (Fedora 44 HITL 2026-06-19, second follow-up to caa2cf4 +
+    # f4da496).
+    #
+    # `/usr/bin/stat` is the host's GNU stat, built with `--enable-selinux`
+    # on Fedora/RHEL/Debian so `%C` returns the real context. The nixpkgs
+    # coreutils we'd otherwise reach via `${"$"}{pkgs.coreutils}/bin/stat`
+    # is built without SELinux support and returns literal `?`. We've
+    # already relied on the host toolchain for `getenforce`, so this is
+    # consistent.
     _collect_selinux_facts() {
     	selinux_state="$(getenforce 2>/dev/null || true)"
     	nix_store_label=""
-    	_nix_bin="$(command -v nix 2>/dev/null || true)"
-    	if [ -n "$_nix_bin" ]; then
-    		_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
-    		nix_store_label="$(/usr/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    	# setpriv lives at a deterministic store path: same flake nixpkgs
+    	# feeds both the wrapper (lib/slop-env/linux.nix) and setup-linux,
+    	# so probing this exact path is equivalent to probing the wrapper's
+    	# actual dependency.
+    	_selinux_probe_target="${pkgs.util-linux}/bin/setpriv"
+    	if [ -e "$_selinux_probe_target" ]; then
+    		nix_store_label="$(/usr/bin/stat -c '%C' "$_selinux_probe_target" 2>/dev/null \
     			| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
     		# A literal `?` means stat couldn't read the context — treat as
     		# "unprobed" so the check / apply behave the same as a missing
-    		# nix binary, rather than falsely green-lighting any non-empty
+    		# probe target, rather than falsely green-lighting any non-empty
     		# string. Must use `if/then` not `[ … ] && …` — the latter
     		# returns nonzero when the test fails, which is fatal under
-    		# `set -eu` in the surrounding wrapper (Fedora 44 HITL after
-    		# f4da496: caused every setup-linux invocation to exit 1
-    		# silently before printing any plan or prereq lines).
+    		# `set -eu` (Fedora 44 HITL after f4da496).
     		if [ "$nix_store_label" = "?" ]; then
     			nix_store_label=""
     		fi
