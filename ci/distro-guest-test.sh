@@ -37,6 +37,38 @@ elif [ -e /etc/profile.d/nix.sh ]; then
 fi
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
+# The multi-user store is root-owned, so every `nix` call below must reach the
+# daemon. The Determinate installer normally starts nix-daemon.socket, but on
+# some guests it returns with the socket still inactive in this session — seen
+# on Fedora under SELinux on GitHub-hosted runners, where the installer's own
+# self-test logs "cannot connect to socket .../daemon-socket/socket". Non-root
+# nix then silently falls back to the local store and dies in setup-linux with
+# 'opening lock file ".../big-lock": Permission denied'. Start the socket
+# explicitly and wait for it; if it never appears, dump diagnostics and fail
+# here with the real cause instead of a confusing permission error downstream.
+# No-op on guests where the socket is already live (Debian/Ubuntu, local KVM).
+DAEMON_SOCKET=/nix/var/nix/daemon-socket/socket
+if [ ! -S "$DAEMON_SOCKET" ] && command -v systemctl >/dev/null 2>&1; then
+  log "starting nix-daemon"
+  sudo systemctl daemon-reload || true
+  sudo systemctl enable --now nix-daemon.socket 2>/dev/null \
+    || sudo systemctl restart nix-daemon.service 2>/dev/null || true
+fi
+waited=0
+while [ ! -S "$DAEMON_SOCKET" ] && [ "$waited" -lt 30 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
+if [ ! -S "$DAEMON_SOCKET" ]; then
+  echo "::error::nix-daemon socket never came up at $DAEMON_SOCKET" >&2
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl status nix-daemon.socket nix-daemon.service --no-pager 2>&1 | tail -n 40 >&2 || true
+    sudo journalctl -u nix-daemon.service -u nix-daemon.socket --no-pager 2>&1 | tail -n 60 >&2 || true
+  fi
+  command -v ausearch >/dev/null 2>&1 && sudo ausearch -m avc -ts recent 2>&1 | tail -n 40 >&2 || true
+  exit 1
+fi
+
 # --- apply real host configuration. setup-linux --apply is interactive
 #     (prints a plan, then read -r [y/N]); feed 'y'. It uses sudo for the
 #     auditd/AppArmor/SELinux/sudoers writes — the VM user has NOPASSWD. ---
