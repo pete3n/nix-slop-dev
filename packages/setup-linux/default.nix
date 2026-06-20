@@ -56,6 +56,25 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		|| true
     }
 
+    # SELinux fact collection. Two facts feed check_selinux_nix_label:
+    # `getenforce` (Enforcing / Permissive / Disabled / "" when absent) and
+    # the SELinux *type* of a known /nix/store binary (default_t when no
+    # fcontext rule exists, bin_t / usr_t after apply mode installs the
+    # /usr→/nix equivalence). Probe the type via `stat -c %C` on the nix
+    # binary itself, since it's the closest thing to a guaranteed-present
+    # store path on a host that has nix installed at all. `cut -d: -f3`
+    # extracts the type field from a system_u:object_r:<type>:s0 context.
+    _collect_selinux_facts() {
+    	selinux_state="$(getenforce 2>/dev/null || true)"
+    	nix_store_label=""
+    	_nix_bin="$(command -v nix 2>/dev/null || true)"
+    	if [ -n "$_nix_bin" ]; then
+    		_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
+    		nix_store_label="$(${pkgs.coreutils}/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    			| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
+    	fi
+    }
+
     # ----- check mode (impure collection -> pure run_checks) -----
     _run_check_mode() {
     	# systemd version integer, e.g. "systemd 257 (257.5)" -> 257.
@@ -86,6 +105,7 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		| ${pkgs.gnugrep}/bin/grep -qE '^-a (task,never|never,task)\b'; then
     		task_never_active=1
     	fi
+    	_collect_selinux_facts
 
     	printf 'setup-linux: Sandbox/Jail prerequisites\n\n'
     	if run_checks \
@@ -95,7 +115,9 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		"$sudoers_file" \
     		"$userns_sysctl" \
     		"$apparmor_profile_loaded" \
-    		"$task_never_active"; then
+    		"$task_never_active" \
+    		"$selinux_state" \
+    		"$nix_store_label"; then
     		printf '\nAll prerequisites met.\n'
     		exit 0
     	else
@@ -151,8 +173,21 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		| ${pkgs.gnugrep}/bin/grep -qE '^-a (task,never|never,task)\b'; then
     		task_never_ok=0
     	fi
+    	# SELinux is satisfied unless the host is Enforcing AND /nix/store
+    	# carries default_t. Permissive / Disabled / absent: no-op (the
+    	# wrapper works in those states even without the equivalence rule,
+    	# though we still recommend applying it if they ever toggle to
+    	# Enforcing). Mirror check_selinux_nix_label's logic so apply mode
+    	# doesn't propose work the check phase would call satisfied.
+    	_collect_selinux_facts
+    	selinux_ok=1
+    	if [ "$selinux_state" = "Enforcing" ]; then
+    		if [ -z "$nix_store_label" ] || [ "$nix_store_label" = "default_t" ]; then
+    			selinux_ok=0
+    		fi
+    	fi
 
-    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok" "$task_never_ok")"
+    	plan="$(plan_actions "$sudoers_ok" "$auditd_ok" "$userns_ok" "$task_never_ok" "$selinux_ok")"
     	if [ -z "$plan" ]; then
     		printf 'setup-linux: already configured; nothing to do.\n'
     		exit 0
@@ -267,6 +302,25 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		sudo auditctl -d never,task 2>/dev/null || true
     	fi
 
+    	# SELinux file-context: drop the equivalence rule then restorecon.
+    	# `semanage` lives in policycoreutils-python-utils, which minimal
+    	# Fedora installs may not have; install it first via dnf (idempotent
+    	# — `dnf install -y` is a no-op when already present). Only ship the
+    	# dnf line on Fedora; other distros either ship semanage already or
+    	# don't enforce SELinux against /nix.
+    	if [ "$selinux_ok" != 1 ]; then
+    		if [ "$distro_id" = fedora ]; then
+    			sudo dnf install -y policycoreutils-python-utils
+    		fi
+    		# `semanage fcontext -a -e /usr /nix` is idempotent in spirit but
+    		# fails with "is already defined" if re-run; tolerate that so
+    		# apply can be re-run safely after partial failures.
+    		sudo semanage fcontext -a -e /usr /nix 2>/dev/null \
+    			|| sudo semanage fcontext -m -e /usr /nix 2>/dev/null \
+    			|| true
+    		sudo restorecon -R /nix
+    	fi
+
     	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'
     	exit 0
     }
@@ -309,8 +363,21 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     		task_never_was_disabled=1
     	fi
 
+    	# Did apply mode install the /nix → /usr fcontext equivalence? Probe
+    	# `semanage fcontext -l` for an entry matching our pattern. semanage
+    	# may be absent on systems where apply never ran; that's fine — the
+    	# absence means nothing to remove.
+    	selinux_fcontext_present=0
+    	if command -v semanage >/dev/null 2>&1; then
+    		if sudo semanage fcontext -l 2>/dev/null \
+    			| ${pkgs.gnugrep}/bin/grep -qE '^/nix[[:space:]].*=[[:space:]]*/usr\b'; then
+    			selinux_fcontext_present=1
+    		fi
+    	fi
+
     	plan="$(plan_remove_actions "$apparmor_profile_present" \
-    		"$apparmor_profile_loaded" "$sudoers_present" "$task_never_was_disabled")"
+    		"$apparmor_profile_loaded" "$sudoers_present" "$task_never_was_disabled" \
+    		"$selinux_fcontext_present")"
     	if [ -z "$plan" ]; then
     		printf 'setup-linux: nothing to remove (host already clean).\n'
     		exit 0
@@ -356,6 +423,13 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     			"$task_never_file"
     		sudo augenrules --load 2>/dev/null || true
     		sudo auditctl -a task,never 2>/dev/null || true
+    	fi
+
+    	# Drop the SELinux /nix → /usr fcontext equivalence and restorecon
+    	# /nix back to default_t.
+    	if [ "$selinux_fcontext_present" = 1 ]; then
+    		sudo semanage fcontext -d -e /nix 2>/dev/null || true
+    		sudo restorecon -R /nix 2>/dev/null || true
     	fi
 
     	printf 'setup-linux: done. Run `nix run github:pete3n/nix-slop-dev#setup-linux -- --check` to verify.\n'

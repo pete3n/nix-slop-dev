@@ -239,5 +239,64 @@ $plan"
     || fail "fully-installed + task_never_was_disabled should plan three remove actions; got:
 $plan"
 
+  # plan_actions takes an optional fifth selinux-fcontext-satisfied boolean
+  # (default 1). When 0 — i.e. SELinux Enforcing AND /nix/store labeled
+  # default_t (Fedora 44 baseline) — apply mode plans the
+  # `semanage fcontext -a -e /usr /nix` equivalence + restorecon -R /nix
+  # step. Without that, init_t (the systemd-executor domain for transient
+  # units with --property=User=…) cannot execve any store binary the
+  # wrapper passes as ExecStart, and the unit exits with 203/EXEC before
+  # the jailed binary runs.
+  plan=$(plan_actions 1 1 1 1 0)
+  case "$plan" in *SELinux*|*selinux*|*fcontext*|*"/nix"*) ;; *) fail "SELinux=unmet plan should mention selinux/fcontext/nix; got: $plan" ;; esac
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 1 ] \
+    || fail "SELinux-only plan should produce one action; got:
+$plan"
+
+  plan=$(plan_actions 1 1 1 1 1)
+  [ -z "$plan" ] || fail "all five satisfied should be a no-op; got:
+$plan"
+
+  # Omitting the fifth arg preserves prior four-arg behavior.
+  plan=$(plan_actions 1 1 1 1)
+  [ -z "$plan" ] || fail "four-arg plan_actions should treat selinux as satisfied; got:
+$plan"
+
+  plan=$(plan_actions 0 0 0 0 0)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 5 ] \
+    || fail "fully-unconfigured + selinux should plan five actions; got:
+$plan"
+
+  # plan_remove_actions takes an optional fifth selinux_fcontext_present
+  # boolean. When set, --remove plans `semanage fcontext -d -e /nix` (drop
+  # the equivalence rule) + restorecon. Independent of the other facts.
+  plan=$(plan_remove_actions 0 0 0 0 1)
+  case "$plan" in *SELinux*|*selinux*|*fcontext*|*"/nix"*) ;; *) fail "selinux_present=1 should plan fcontext removal; got: $plan" ;; esac
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 1 ] \
+    || fail "selinux-only remove should plan exactly one action; got:
+$plan"
+
+  plan=$(plan_remove_actions 1 1 1 1 1)
+  [ "$(printf '%s\n' "$plan" | grep -c .)" -eq 4 ] \
+    || fail "fully-installed + task_never + selinux should plan four remove actions; got:
+$plan"
+
+  # selinux_apply_cmd / selinux_remove_cmd render the exact host commands.
+  # Pin them so a refactor that drops `-e /usr /nix` (the equivalence path
+  # — without it semanage would expect a target type instead) fails loudly.
+  cmd=$(selinux_apply_cmd) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux_apply_cmd should succeed (rc=$status)"
+  case "$cmd" in *"semanage fcontext -a -e /usr /nix"*) ;; *) fail "apply cmd missing -e /usr /nix; got:
+$cmd" ;; esac
+  case "$cmd" in *"restorecon -R /nix"*) ;; *) fail "apply cmd missing restorecon -R /nix; got:
+$cmd" ;; esac
+
+  cmd=$(selinux_remove_cmd) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux_remove_cmd should succeed (rc=$status)"
+  case "$cmd" in *"semanage fcontext -d -e /nix"*) ;; *) fail "remove cmd missing -d -e /nix; got:
+$cmd" ;; esac
+  case "$cmd" in *"restorecon -R /nix"*) ;; *) fail "remove cmd missing restorecon -R /nix; got:
+$cmd" ;; esac
+
   touch "$out"
 ''

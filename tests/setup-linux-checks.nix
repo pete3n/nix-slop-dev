@@ -92,27 +92,91 @@ pkgs.runCommand "setup-linux-checks-tests" { } ''
   [ "$status" -eq 1 ] || fail "task_never active should fail (rc=$status)"
   case "$report" in "✗"*) ;; *) fail "task_never 1: expected ✗, got: $report" ;; esac
 
+  # SELinux file-context check (HITL 2026-06-19, Fedora 44).
+  # `sudo systemd-run --property=User=$USER` causes systemd-executor (running
+  # in init_t) to execve binaries the wrapper passes as ExecStart — i.e.
+  # setpriv at /nix/store/.../bin/setpriv. Fedora's targeted policy labels
+  # everything under /nix/store as default_t (no policy entry); init_t →
+  # default_t : file execute is denied, so the unit exits with EXIT_EXEC=203
+  # before the jailed binary ever runs. setup-linux's --apply mode now adds
+  # a `semanage fcontext -a -e /usr /nix` equivalence rule and restorecons,
+  # giving /nix/store entries bin_t (or whatever /usr/.../bin/* resolves to)
+  # which init_t can exec. Two facts: selinux_state from getenforce and
+  # nix_store_label from `stat -c %C` on a known store binary.
+  report=$(check_selinux_nix_label "" "") && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux absent should pass (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "selinux absent: expected ✓, got: $report" ;; esac
+
+  report=$(check_selinux_nix_label Disabled "") && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux Disabled should pass (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "selinux Disabled: expected ✓, got: $report" ;; esac
+
+  # Permissive logs denies but doesn't enforce — the wrapper works in this
+  # state today. Pass with a note so the user understands the state. If
+  # they toggle to Enforcing later, the label still needs to be right; we
+  # surface that via the note rather than failing the prereq.
+  report=$(check_selinux_nix_label Permissive default_t) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux Permissive + default_t should pass with warning (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "selinux Permissive: expected ✓, got: $report" ;; esac
+
+  # Enforcing + non-default_t: the equivalence rule has been applied, init_t
+  # can exec /nix/store entries — green.
+  report=$(check_selinux_nix_label Enforcing bin_t) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "selinux Enforcing + bin_t should pass (rc=$status)"
+  case "$report" in "✓"*) ;; *) fail "selinux Enforcing + bin_t: expected ✓, got: $report" ;; esac
+
+  # Enforcing + default_t: the bug we're fixing. The check must fail with
+  # remediation pointing at setup-linux --apply, and the message must name
+  # the actual label so the user can correlate it with `ls -laZ` output.
+  report=$(check_selinux_nix_label Enforcing default_t) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "selinux Enforcing + default_t should fail (rc=$status)"
+  case "$report" in "✗"*) ;; *) fail "selinux Enforcing + default_t: expected ✗, got: $report" ;; esac
+  case "$report" in *default_t*) ;; *) fail "selinux deny message should name the label; got: $report" ;; esac
+  case "$report" in *apply*) ;; *) fail "selinux deny message should point at --apply; got: $report" ;; esac
+
+  # Enforcing + empty label (couldn't probe — no nix binary on PATH).
+  # Should fail because we cannot confirm the label is good; the remediation
+  # is to either install nix-on-PATH or run apply.
+  report=$(check_selinux_nix_label Enforcing "") && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "selinux Enforcing + empty label should fail (rc=$status)"
+  case "$report" in "✗"*) ;; *) fail "selinux unknown: expected ✗, got: $report" ;; esac
+
   # Aggregation: run_checks reports every prerequisite and exits zero only when
   # all pass. Args: systemd_version controllers_file auditd_state sudoers_file
-  # userns_sysctl apparmor_profile_loaded task_never_active.
+  # userns_sysctl apparmor_profile_loaded task_never_active selinux_state
+  # nix_store_label.
   touch agg-controllers agg-sudoers
-  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 > allpass.txt \
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 "" "" > allpass.txt \
     && status=0 || status=$?
-  [ "$status" -eq 0 ] || fail "all prerequisites met should exit 0 (rc=$status)"
-  [ "$(grep -c '✓' allpass.txt)" -eq 6 ] || fail "all-pass: expected 6 ✓ lines, got:
+  [ "$status" -eq 0 ] || fail "all prerequisites met (no SELinux) should exit 0 (rc=$status)"
+  [ "$(grep -c '✓' allpass.txt)" -eq 7 ] || fail "all-pass: expected 7 ✓ lines, got:
 $(cat allpass.txt)"
   case "$(cat allpass.txt)" in *✗*) fail "all-pass output must contain no ✗" ;; esac
 
-  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 > onefail.txt \
+  # Same args but with SELinux Enforcing + bin_t (post-apply Fedora state).
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 Enforcing bin_t > fed_ok.txt \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "all green + Enforcing/bin_t should exit 0 (rc=$status)"
+  case "$(cat fed_ok.txt)" in *✗*) fail "Enforcing/bin_t output must contain no ✗; got:
+$(cat fed_ok.txt)" ;; esac
+
+  run_checks 230 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 "" "" > onefail.txt \
     && status=0 || status=$?
   [ "$status" -ne 0 ] || fail "a failing prerequisite should exit nonzero"
 
   # task,never active alone (everything else green) should also fail the
   # aggregate, since it silently disables sandbox observability.
-  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 1 > tnactive.txt \
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 1 "" "" > tnactive.txt \
     && status=0 || status=$?
   [ "$status" -ne 0 ] || fail "task_never active alone should fail the aggregate"
   case "$(cat tnactive.txt)" in *task,never*) ;; *) fail "task_never failure should mention the rule name" ;; esac
+
+  # SELinux Enforcing + default_t alone (everything else green) must fail the
+  # aggregate — this is the Fedora 203 regression baseline.
+  run_checks 249 "$PWD/agg-controllers" active "$PWD/agg-sudoers" 0 0 0 Enforcing default_t > sefail.txt \
+    && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "Enforcing + default_t alone should fail the aggregate"
+  case "$(cat sefail.txt)" in *default_t*) ;; *) fail "selinux failure should name the label" ;; esac
 
   touch "$out"
 ''

@@ -2,15 +2,16 @@
   pkgs,
   ...
 }:
-# Reports unmet Sandbox prerequisites (auditd running, NOPASSWD sudo, and on
-# non-NixOS hosts the AppArmor unprivileged-userns restriction) with
-# distro-aware remediation, shared by the claude-code template shellHooks.
-# Returns 0 when all system prerequisites are met, nonzero otherwise.
+# Reports unmet Sandbox prerequisites (auditd running, NOPASSWD sudo, the
+# AppArmor unprivileged-userns restriction on non-NixOS Ubuntu, and the
+# SELinux /nix file-context on non-NixOS Fedora/RHEL) with distro-aware
+# remediation, shared by the claude-code template shellHooks. Returns 0
+# when all system prerequisites are met, nonzero otherwise.
 #
-# Both the NixOS marker and the userns sysctl path are overridable by
-# argument so the build sandbox can exercise every branch without touching
-# /etc/NIXOS or /proc/sys; production calls pass nothing and detect the real
-# paths.
+# Probe paths and the SELinux facts are overridable by positional argument
+# so the build sandbox can exercise every branch without touching /etc/NIXOS,
+# /proc/sys, or running getenforce on a real Fedora host; production calls
+# pass nothing and the script collects the live state.
 #
 # On non-NixOS we always offer the canonical one-shot
 #   `nix run github:pete3n/nix-slop-dev#setup-linux -- --apply`
@@ -30,6 +31,12 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     # we look there for a `nix-slop-dev-bwrap[.NN]` entry.
     apparmor_profiles_path="''${3:-/sys/kernel/security/apparmor/policy/profiles}"
     apparmor_profile_name=nix-slop-dev-bwrap
+    # SELinux fact overrides. Sentinel `__unset__` distinguishes "not passed"
+    # from "passed as empty string" — production passes nothing and we
+    # collect via `getenforce` + `stat -c %C` on a nix-store binary; tests
+    # pass explicit values to drive each branch deterministically.
+    selinux_state_override="''${4-__unset__}"
+    nix_store_label_override="''${5-__unset__}"
     setup_linux_cmd='nix run github:pete3n/nix-slop-dev#setup-linux -- --apply'
     prereq_ok=1
 
@@ -127,6 +134,43 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     			printf '  Or see docs/non-nixos-linux.md §4 for the manual profile steps.\n\n'
     			prereq_ok=0
     		fi
+    	fi
+    fi
+
+    # SELinux /nix file-context (non-NixOS Fedora/RHEL). When the host is
+    # Enforcing and /nix/store carries default_t, init_t cannot execve the
+    # store binaries `sudo systemd-run --property=User=…` hands as ExecStart
+    # — the wrapper dies with EXIT_EXEC=203. Apply mode installs a
+    # `semanage fcontext -a -e /usr /nix` equivalence and restorecons; after
+    # that the type is bin_t and init_t can exec. Skipped on NixOS (the
+    # NixOS-managed selinux policies already handle /nix correctly).
+    if [ ! -f "$nixos_marker" ]; then
+    	if [ "$selinux_state_override" = "__unset__" ]; then
+    		selinux_state="$(getenforce 2>/dev/null || true)"
+    	else
+    		selinux_state="$selinux_state_override"
+    	fi
+    	if [ "$nix_store_label_override" = "__unset__" ]; then
+    		nix_store_label=""
+    		_nix_bin="$(command -v nix 2>/dev/null || true)"
+    		if [ -n "$_nix_bin" ]; then
+    			_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
+    			nix_store_label="$(${pkgs.coreutils}/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    				| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
+    		fi
+    	else
+    		nix_store_label="$nix_store_label_override"
+    	fi
+    	if [ "$selinux_state" = "Enforcing" ] \
+    		&& { [ -z "$nix_store_label" ] || [ "$nix_store_label" = "default_t" ]; }; then
+    		printf '\033[1;33m⚠ SELinux is enforcing and /nix/store carries default_t.\033[0m\n'
+    		printf '  sudo systemd-run cannot execve store binaries (init_t→default_t deny);\n'
+    		printf '  the sandboxed wrapper will exit 203 before the jailed binary runs.\n'
+    		printf '  Run (apply mode installs a `semanage fcontext -a -e /usr /nix` equivalence\n'
+    		printf '  and restorecons /nix so store paths inherit bin_t):\n'
+    		printf '    %s\n' "$setup_linux_cmd"
+    		printf '  Or see docs/non-nixos-linux.md §5 for the manual semanage steps.\n\n'
+    		prereq_ok=0
     	fi
     fi
 

@@ -94,5 +94,63 @@ $userns_on_nixos" ;;
     *) ;;
   esac
 
+  # SELinux /nix file-context check (Fedora 44 HITL 2026-06-19). Args 4+5
+  # are fact overrides for testing — getenforce output and the SELinux
+  # type field for /nix/store/.../bin/nix. The check fires only when both
+  # are set the bad way (Enforcing + default_t / empty).
+  selinux_bad="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" Enforcing default_t 2>&1 || true)"
+  case "$selinux_bad" in
+    *SELinux*) ;;
+    *) fail "Enforcing + default_t should mention SELinux; got:
+$selinux_bad" ;;
+  esac
+  case "$selinux_bad" in
+    *setup-linux*) ;;
+    *) fail "selinux guidance should point at setup-linux; got:
+$selinux_bad" ;;
+  esac
+  case "$selinux_bad" in
+    *"non-nixos-linux.md"*) ;;
+    *) fail "selinux guidance should reference §5 docs; got:
+$selinux_bad" ;;
+  esac
+
+  # Enforcing + bin_t: the post-apply state. SELinux warning must NOT
+  # fire even though SELinux is still enforcing.
+  selinux_good="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" Enforcing bin_t 2>&1 || true)"
+  case "$selinux_good" in
+    *SELinux*) fail "Enforcing + bin_t should silence the SELinux warning; got:
+$selinux_good" ;;
+    *) ;;
+  esac
+
+  # Permissive + default_t: deny would log but not block. Don't fire the
+  # warning (the wrapper works today; user just doesn't have the
+  # post-apply state pinned for a future Enforcing toggle).
+  selinux_permissive="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" Permissive default_t 2>&1 || true)"
+  case "$selinux_permissive" in
+    *SELinux*) fail "Permissive should not surface the SELinux warning; got:
+$selinux_permissive" ;;
+    *) ;;
+  esac
+
+  # SELinux Disabled / absent: warning silent (no enforcement at all).
+  selinux_disabled="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/absent-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" Disabled "" 2>&1 || true)"
+  case "$selinux_disabled" in
+    *SELinux*) fail "Disabled SELinux should not surface the warning; got:
+$selinux_disabled" ;;
+    *) ;;
+  esac
+
+  # NixOS marker takes precedence — even with Enforcing + default_t, the
+  # NixOS branch skips the SELinux check (NixOS policies handle /nix
+  # correctly via its own mechanism).
+  selinux_on_nixos="$(${prereqGuidance}/bin/slop-prereq-guidance "$PWD/nixos-marker" "$PWD/userns-permitted" "$PWD/apparmor-no-bwrap-profile" Enforcing default_t 2>&1 || true)"
+  case "$selinux_on_nixos" in
+    *SELinux*) fail "NixOS branch should not surface the SELinux guidance; got:
+$selinux_on_nixos" ;;
+    *) ;;
+  esac
+
   touch "$out"
 ''

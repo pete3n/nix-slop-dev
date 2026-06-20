@@ -113,6 +113,56 @@ check_task_never() {
 	return 0
 }
 
+# Fedora's targeted SELinux policy has no entry for /nix, so everything under
+# /nix/store ends up labeled default_t. `sudo systemd-run --property=User=…`
+# runs the unit's ExecStart via systemd-executor in init_t, and the kernel
+# refuses init_t → default_t : file execute — the wrapper dies with
+# EXIT_EXEC=203 before the jailed binary ever runs (Fedora 44 HITL
+# 2026-06-19). Apply mode installs a `semanage fcontext -a -e /usr /nix`
+# equivalence rule and restorecons; afterwards /nix/store binaries inherit
+# /usr's labels (typically bin_t) which init_t can exec.
+#
+# Two facts: selinux_state from `getenforce` ("Enforcing" / "Permissive" /
+# "Disabled" / "" when getenforce is absent), and nix_store_label from
+# `stat -c %C` on a representative store binary (typically the type field,
+# e.g. "default_t" or "bin_t"). Empty label means we couldn't probe — fails
+# in Enforcing mode because we cannot prove the wrapper will work; passes
+# in Permissive/Disabled/absent because policy isn't enforcing anyway.
+check_selinux_nix_label() {
+	selinux_state="$1"
+	nix_store_label="$2"
+
+	case "$selinux_state" in
+		""|Disabled)
+			printf '✓ SELinux not active (%s) — no /nix labelling needed\n' "${selinux_state:-not installed}"
+			return 0
+			;;
+		Permissive)
+			# Permissive logs but doesn't enforce — wrapper works today. Warn
+			# so the user knows toggling to Enforcing without applying first
+			# would break things, but pass the prereq.
+			if [ "$nix_store_label" = "default_t" ]; then
+				printf '✓ SELinux Permissive; /nix/store label %s (toggling to Enforcing without setup-linux --apply would break the wrapper)\n' "$nix_store_label"
+			else
+				printf '✓ SELinux Permissive; /nix/store label %s\n' "${nix_store_label:-unprobed}"
+			fi
+			return 0
+			;;
+	esac
+
+	# Enforcing path.
+	if [ -z "$nix_store_label" ]; then
+		printf '✗ SELinux Enforcing but /nix/store label could not be probed (no nix binary on PATH) — install nix-on-PATH then re-check, or run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n'
+		return 1
+	fi
+	if [ "$nix_store_label" = "default_t" ]; then
+		printf '✗ SELinux Enforcing and /nix/store labeled default_t — sudo systemd-run cannot execve store binaries (init_t→default_t deny, exit 203); run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n'
+		return 1
+	fi
+	printf '✓ SELinux Enforcing; /nix/store labeled %s (init_t can execve)\n' "$nix_store_label"
+	return 0
+}
+
 # Run every prerequisite check against already-collected host facts, printing
 # each report line in order. Returns 0 only if all pass, 1 if any fail — the
 # check-mode exit contract. Each check runs regardless of earlier failures so
@@ -125,6 +175,8 @@ run_checks() {
 	userns_sysctl="$5"
 	apparmor_profile_loaded="$6"
 	task_never_active="$7"
+	selinux_state="${8:-}"
+	nix_store_label="${9:-}"
 
 	checks_failed=0
 	check_systemd_version "$systemd_version" || checks_failed=1
@@ -133,6 +185,7 @@ run_checks() {
 	check_sudoers "$sudoers_file" || checks_failed=1
 	check_userns_restriction "$userns_sysctl" "$apparmor_profile_loaded" || checks_failed=1
 	check_task_never "$task_never_active" || checks_failed=1
+	check_selinux_nix_label "$selinux_state" "$nix_store_label" || checks_failed=1
 
 	return "$checks_failed"
 }

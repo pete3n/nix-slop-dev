@@ -139,8 +139,10 @@ apparmor_profile_content() {
 # Compute the idempotent change plan from satisfied-booleans (1 = already in
 # place, 0 = needs action): sudoers drop-in, auditd, optional userns AppArmor
 # profile, optional task,never audit-suppression rule (Fedora ships one that
-# defeats sandbox observability). Prints one line per planned action in apply
-# order; prints nothing when everything is already in place. Always returns 0.
+# defeats sandbox observability), optional SELinux /nix fcontext equivalence
+# (Fedora targeted policy labels /nix as default_t which init_t cannot exec).
+# Prints one line per planned action in apply order; prints nothing when
+# everything is already in place. Always returns 0.
 plan_actions() {
 	sudoers_ok="$1"
 	auditd_ok="$2"
@@ -150,6 +152,10 @@ plan_actions() {
 	# Optional: 1 = no task,never rule active (good); 0 = active and must be
 	# removed. Absent defaults to satisfied.
 	task_never_ok="${4:-1}"
+	# Optional: 1 = SELinux file-context for /nix is correct (or SELinux not
+	# enforcing); 0 = Enforcing + /nix labeled default_t, must install the
+	# /usr→/nix equivalence rule. Absent defaults to satisfied.
+	selinux_ok="${5:-1}"
 
 	if [ "$auditd_ok" != "1" ]; then
 		printf 'install and enable auditd\n'
@@ -163,7 +169,36 @@ plan_actions() {
 	if [ "$task_never_ok" != "1" ]; then
 		printf 'comment out `-a task,never` in /etc/audit/rules.d/audit.rules (suppresses sandbox observability) and remove from running kernel\n'
 	fi
+	if [ "$selinux_ok" != "1" ]; then
+		printf 'add SELinux fcontext equivalence /nix → /usr and restorecon /nix (otherwise init_t cannot execve store binaries — Fedora 203/EXEC)\n'
+	fi
 	return 0
+}
+
+# Render the exact host commands setup-linux runs to install the SELinux
+# /nix fcontext equivalence. `semanage fcontext -a -e /usr /nix` adds a
+# path-substitution rule (NOT a type assignment — that's why `-e` and not
+# `-t bin_t`); restorecon then applies the rule so existing files under
+# /nix get relabeled. The `dnf install -y policycoreutils-python-utils`
+# guard is needed because minimal Fedora installs ship the base
+# policycoreutils (restorecon) but not the python tooling that provides
+# `semanage`. Idempotent: re-running adds nothing (semanage detects the
+# existing equivalence).
+selinux_apply_cmd() {
+	printf '%s\n' \
+		"dnf install -y policycoreutils-python-utils" \
+		"semanage fcontext -a -e /usr /nix" \
+		"restorecon -R /nix"
+}
+
+# Render the symmetric `--remove` host commands. `-d -e /nix` drops the
+# equivalence rule (the `-d` deletion form takes only the target path,
+# not the source). restorecon then relabels /nix back to default_t.
+# Idempotent: re-running after removal exits clean.
+selinux_remove_cmd() {
+	printf '%s\n' \
+		"semanage fcontext -d -e /nix" \
+		"restorecon -R /nix"
 }
 
 # Compute the idempotent removal plan, mirroring plan_actions. Takes three
@@ -183,6 +218,10 @@ plan_remove_actions() {
 	# task,never rule and we should restore it on remove). 0 / absent = no
 	# restoration needed.
 	task_never_was_disabled="${4:-0}"
+	# Optional: 1 if `semanage fcontext -l` carries our /nix → /usr
+	# equivalence (apply mode installed it). --remove drops the rule and
+	# restorecons /nix back to default_t. 0 / absent = nothing to remove.
+	selinux_fcontext_present="${5:-0}"
 
 	if [ "$apparmor_profile_present" = "1" ] || [ "$apparmor_profile_loaded" = "1" ]; then
 		printf 'unload and delete AppArmor profile (/etc/apparmor.d/nix-slop-dev-bwrap)\n'
@@ -192,6 +231,9 @@ plan_remove_actions() {
 	fi
 	if [ "$task_never_was_disabled" = "1" ]; then
 		printf 'restore `-a task,never` in /etc/audit/rules.d/audit.rules (re-enables Fedora default)\n'
+	fi
+	if [ "$selinux_fcontext_present" = "1" ]; then
+		printf 'drop SELinux fcontext equivalence /nix → /usr and restorecon /nix back to default_t\n'
 	fi
 	return 0
 }

@@ -65,6 +65,9 @@ modifies anything. The prerequisites are:
 - **sudoers drop-in** — `/etc/sudoers.d/sandboxed` (step 3).
 - **unprivileged user namespaces** — permitted, or an AppArmor profile grants
   them to bubblewrap (step 4). Only relevant on Ubuntu 23.10+/24.04+.
+- **SELinux `/nix` file-context** — when SELinux is enforcing, `/nix/store`
+  must be labeled like `/usr` (step 5). Only relevant on SELinux distros
+  (Fedora, RHEL, derivatives).
 
 ## 2. Install and enable auditd
 
@@ -178,7 +181,53 @@ reboot, so persisting it would require an `/etc/sysctl.d/` drop-in — at
 which point you have a persistent system-wide regression for marginal
 convenience. The AppArmor profile is the recommended path.
 
-## 5. Verify
+## 5. SELinux `/nix` file-context (Fedora / RHEL / derivatives)
+
+Targeted SELinux policies ship no entry for `/nix`, so every store path
+ends up labeled `default_t`. `sudo systemd-run --property=User=…` runs the
+wrapper's `ExecStart` via `systemd-executor` in the `init_t` domain, and
+the kernel refuses `init_t → default_t : file execute` — the transient
+unit exits with `EXIT_EXEC=203` before the jailed binary ever runs.
+Check the host state:
+
+```sh
+getenforce                                                       # "Enforcing" / "Permissive" / "Disabled"
+stat -c '%C' "$(readlink -f "$(command -v nix)")"                # type field should NOT be default_t
+sudo ausearch -m AVC -ts recent | grep -E 'default_t|nix/store'  # past denials, if any
+```
+
+If `getenforce` prints `Enforcing` and the `stat` type field is
+`default_t`, install a file-context equivalence that treats `/nix` like
+`/usr` (so `/nix/store/.../bin/foo` inherits `bin_t`):
+
+```sh
+sudo dnf install -y policycoreutils-python-utils   # provides `semanage` on minimal Fedora
+sudo semanage fcontext -a -e /usr /nix
+sudo restorecon -R /nix
+```
+
+Verify:
+
+```sh
+stat -c '%C' "$(readlink -f "$(command -v nix)")"   # type should be bin_t now
+```
+
+`setup-linux --apply` does all of this for you (and `setup-linux --remove`
+drops the equivalence + relabels `/nix` back to `default_t`).
+
+### Why an equivalence rule and not a custom type?
+
+The `-e /usr /nix` form tells SELinux "label paths under `/nix` the way
+you label the same suffix under `/usr`". After `restorecon -R /nix`,
+`/nix/store/.../bin/setpriv` gets the same context the equivalent
+`/usr/.../bin/setpriv` would have — typically `bin_t` — which `init_t`
+already has policy to execute. Inventing a custom `nix_store_t` type
+would require shipping a policy module (.te + .pp + semodule install)
+just to re-add every `init_t → bin_t` rule against the new type. The
+equivalence is one `semanage` call and inherits Fedora's existing
+`bin_t` policy verbatim.
+
+## 6. Verify
 
 ```sh
 nix run github:pete3n/nix-slop-dev#setup-linux   # all ✓, exits 0
