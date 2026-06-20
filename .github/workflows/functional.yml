@@ -10,15 +10,17 @@
 #              exported templates' jails (template-functional). Real today.
 #   distros  — Debian/Ubuntu/Fedora full end-to-end (setup-linux --apply, then
 #              the oracle) in a KVM cloud-image VM. Calls ci/distro-e2e.sh.
-#              Implemented; gated on DISTRO_E2E_READY.
+#              Validated on real hardware; runs by default.
 #   macos    — Seatbelt enforcement on a real mac, then the oracle. Calls
-#              ci/macos-functional.sh. PENDING; gated on MACOS_FUNCTIONAL_READY.
+#              ci/macos-functional.sh. Validated on aarch64-darwin; runs by default.
 #
-# The distros/macos jobs are gated on per-harness repo variables
-# (Settings → Secrets and variables → Actions → Variables) so they can neither
-# false-pass nor false-fail until activated:
-#   DISTRO_E2E_READY=true        — distro harness validated on KVM infra
-#   MACOS_FUNCTIONAL_READY=true  — macOS harness implemented
+# The distros/macos jobs are validated and run by default. Each carries a kill
+# switch — a per-harness repo variable (Settings → Secrets and variables →
+# Actions → Variables); set it to 'false' to disable that harness without a
+# code change (useful if it goes flaky on the GitHub-hosted runner), unset or
+# any other value runs it:
+#   DISTRO_E2E_READY=false        — disable the distro harness
+#   MACOS_FUNCTIONAL_READY=false  — disable the macOS harness
 name: functional
 
 on:
@@ -91,10 +93,11 @@ jobs:
 
   distros:
     name: distro e2e (${{ matrix.distro }})
-    # Implemented (ci/distro-e2e.sh). Gated until validated once via manual
-    # dispatch on real KVM infra; set the repo variable DISTRO_E2E_READY=true
-    # to activate on merge/nightly.
-    if: vars.DISTRO_E2E_READY == 'true'
+    # Validated on real KVM infra (Debian/Ubuntu/Fedora, ci/distro-e2e.sh), so
+    # this runs by default on merge/nightly/tag/dispatch. Kill switch: set the
+    # repo variable DISTRO_E2E_READY=false to disable (e.g. if the harness goes
+    # flaky on the GitHub-hosted runner); unset or any other value runs it.
+    if: vars.DISTRO_E2E_READY != 'false'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -125,10 +128,11 @@ jobs:
 
   macos:
     name: macOS functional
-    # Implemented (ci/macos-functional.sh). Gated until validated once on a
-    # real mac (see the harness header's first-run risk points); set the repo
-    # variable MACOS_FUNCTIONAL_READY=true to activate.
-    if: vars.MACOS_FUNCTIONAL_READY == 'true'
+    # Validated on a real mac (aarch64-darwin, ci/macos-functional.sh), so this
+    # runs by default on merge/nightly/tag/dispatch. Kill switch: set the repo
+    # variable MACOS_FUNCTIONAL_READY=false to disable (e.g. if it goes flaky on
+    # the GitHub-hosted runner); unset or any other value runs it.
+    if: vars.MACOS_FUNCTIONAL_READY != 'false'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
