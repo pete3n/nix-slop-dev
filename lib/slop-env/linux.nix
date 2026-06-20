@@ -60,7 +60,14 @@ let
       # 2026-06-19.
       bootstrapBlock = ''
         CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+        # Host-visible Scratch (TMPDIR) and Exchange (CLAUDE_EXCHANGE_DIR) —
+        # see CONTEXT.md. Exported here and forwarded into the jail
+        # (try-fwd-env in shared.nix) so the agent's temp and the handoff
+        # channel land in host-reachable, rw-bound dirs instead of the
+        # jail-private /tmp. mkdir host-side so they're browsable pre-launch.
+        export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+        export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
         touch "$CLAUDE_SHARED_DIR/.credentials.json"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
       '';
@@ -113,14 +120,14 @@ let
           set -euo pipefail
           ${placeholderPreamble "${jailedClaude}/bin/jailed-claude"}
           exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
-            -e CLAUDE_CONFIG_DIR \
+            -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             "$SLOP_LAUNCHER" "$@"
         '' else ''
           set -euo pipefail
           ${concretePreamble}
           exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
-            -e CLAUDE_CONFIG_DIR \
+            -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             ${jailedClaude}/bin/jailed-claude "$@"
         ''
@@ -135,13 +142,15 @@ let
         if usesPlaceholder then ''
           set -euo pipefail
           ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
-          exec ${sandboxed}/bin/sandboxed -q -- \
+          exec ${sandboxed}/bin/sandboxed -q \
+            -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             "$SLOP_LAUNCHER" "$@"
         '' else ''
           set -euo pipefail
           ${concretePreamble}
-          exec ${sandboxed}/bin/sandboxed -q -- \
+          exec ${sandboxed}/bin/sandboxed -q \
+            -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
             ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
             ${jailedShell}/bin/jailed-shell "$@"
         ''
@@ -152,7 +161,12 @@ let
           # Project unique config
           export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
           export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
-          mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+          # Host-visible Scratch + Exchange (see CONTEXT.md). Exported in the
+          # outer dev shell too so the user can `cd "$CLAUDE_EXCHANGE_DIR"`
+          # and drop files in for the agent to ingest.
+          export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+          export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+          mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           touch "$CLAUDE_SHARED_DIR/.credentials.json"
           [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
@@ -174,18 +188,19 @@ let
 
           if [ "$_setup_ok" -eq 1 ]; then
           	printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
-          fi${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
+          fi
+          printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$CLAUDE_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
 
           # Jailed Claude Code
           claude() {
-          	mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
+          	mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           	touch "$CLAUDE_SHARED_DIR/.credentials.json"
           	[ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
           	sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
-          		-e CLAUDE_CONFIG_DIR \
+          		-e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
           		${lib.concatMapStrings (v: "-e ${v} \\\n\t\t") extraSandboxedEnvForwards}setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
           }
-          alias jail-shell="sandboxed -q -- setpriv --ambient-caps=-sys_nice -- jailed-shell"
+          alias jail-shell="sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- setpriv --ambient-caps=-sys_nice -- jailed-shell"
         '';
     in
     {

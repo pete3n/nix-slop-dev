@@ -16,10 +16,15 @@
       ...
     }:
     let
-      # Darwin not supported by the sandbox solution
+      # All four systems: Linux (bwrap jail) and Darwin (Seatbelt jail,
+      # ADR-0001). The lib's per-OS dispatch (lib/slop-env) handles the
+      # enforcement mechanism; the combinators and shellHook below are
+      # portable across both.
       systems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
       ];
       neovim-overlay = import ./slop-env/nix/neovim-overlay.nix { inherit inputs; };
     in
@@ -35,6 +40,17 @@
         };
         slop = nix-slop-dev.lib.slopEnv pkgs;
 
+        # hunk re-exported by nix-slop-dev (ADR-0007). Merged into the skills
+        # bundle so the hunk-review skill is version-locked to the installed
+        # binary without a runtime nested bind (which would EROFS under the
+        # read-only skills mount).
+        hunk = nix-slop-dev.packages.${system}.hunk;
+        skills = pkgs.runCommand "nvim-dev-skills" { } ''
+          mkdir -p "$out"
+          cp -r ${./slop-env/claude-config/skills}/. "$out/"
+          cp -r ${hunk}/skills/hunk-review "$out/hunk-review"
+        '';
+
         nvimDev = pkgs.nvim-dev;
         nvimPackDir = nvimDev.packDir;
       in
@@ -49,8 +65,11 @@
           projectName = "slop-dev-nvim-project"; # Update per-project
           claudeMdFile = ./slop-env/claude-config/CLAUDE.md;
           rulesDir = ./slop-env/claude-config/rules;
-          skillsDir = ./slop-env/claude-config/skills;
+          skillsDir = skills;
 
+          # hunk in projectPkgs reaches BOTH the jail (agent `hunk session …`)
+          # and this dev shell (your `hunk diff` TUI). See ADR-0007. The
+          # let-bound `hunk` shadows any `with pkgs` attr of the same name.
           projectPkgs = with pkgs; [
             lua-language-server
             nixd
@@ -58,6 +77,7 @@
             luajitPackages.luacheck
             luajitPackages.busted
             nvimDev
+            hunk
           ];
 
           # Wired into the jail via set-env combinators (lib auto-derives
@@ -98,7 +118,11 @@
             mkdir -p ~/.config
             rm -rf ~/.local/state/nvim-dev/swap
             mkdir -p ~/.local/state/nvim-dev/swap
-            ln -Tfns "$PWD/nvim" ~/.config/nvim-dev
+            # Point ~/.config/nvim-dev at the project's nvim config. Done as
+            # rm + ln -s (not `ln -Tfns`) because -T is GNU-only and the host
+            # dev shell on Darwin resolves BSD /usr/bin/ln, which lacks it.
+            rm -rf ~/.config/nvim-dev
+            ln -s "$PWD/nvim" ~/.config/nvim-dev
             printf 'nvim-dev: %s\n' "$(which nvim-dev)"
           '';
         };
