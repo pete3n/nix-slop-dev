@@ -38,6 +38,13 @@ The following are host specific platform setup instructions:
 
 ### Tested platforms
 
+Live per-platform functional-CI status (latest `main` run):
+
+[![nixos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/nixos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
+[![templates](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/templates.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
+[![distros](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/distros.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
+[![macos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/macos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
+
 | OS                 | Version                     | Host setup                |
 |--------------------|-----------------------------|---------------------------|
 | NixOS              | 26.05                       | `nixosModules.sandboxed`  |
