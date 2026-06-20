@@ -155,8 +155,14 @@ pkgs.writeShellScriptBin "slop-prereq-guidance" # bash
     		_nix_bin="$(command -v nix 2>/dev/null || true)"
     		if [ -n "$_nix_bin" ]; then
     			_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
-    			nix_store_label="$(${pkgs.coreutils}/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    			# `/usr/bin/stat` (host's GNU stat, built with --enable-selinux
+    			# on Fedora/RHEL/Debian) returns the real context; nixpkgs's
+    			# coreutils stat is built without SELinux and returns `?`,
+    			# which would silently green-light the check. Symmetry with
+    			# setup-linux's _collect_selinux_facts.
+    			nix_store_label="$(/usr/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
     				| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
+    			[ "$nix_store_label" = "?" ] && nix_store_label=""
     		fi
     	else
     		nix_store_label="$nix_store_label_override"

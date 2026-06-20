@@ -150,9 +150,14 @@ check_selinux_nix_label() {
 			;;
 	esac
 
-	# Enforcing path.
-	if [ -z "$nix_store_label" ]; then
-		printf '✗ SELinux Enforcing but /nix/store label could not be probed (no nix binary on PATH) — install nix-on-PATH then re-check, or run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n'
+	# Enforcing path. Literal `?` means stat couldn't read the SELinux
+	# context — treat as unprobed (same as empty). The collector already
+	# normalises this, but pin it here too so a future caller that bypasses
+	# the collector can't silently green-light a misprobe (Fedora 44 HITL
+	# 2026-06-19 — initial probe used nixpkgs coreutils stat without SELinux
+	# support, which returned literal `?`).
+	if [ -z "$nix_store_label" ] || [ "$nix_store_label" = "?" ]; then
+		printf '✗ SELinux Enforcing but /nix/store label could not be probed (stat returned ? or no nix binary on PATH; install /usr/bin/stat with SELinux support or nix-on-PATH, then re-check; or run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n'
 		return 1
 	fi
 	if [ "$nix_store_label" = "default_t" ]; then

@@ -141,6 +141,19 @@ pkgs.runCommand "setup-linux-checks-tests" { } ''
   [ "$status" -eq 1 ] || fail "selinux Enforcing + empty label should fail (rc=$status)"
   case "$report" in "✗"*) ;; *) fail "selinux unknown: expected ✗, got: $report" ;; esac
 
+  # Enforcing + literal `?` label is the "stat couldn't read the context"
+  # case. _collect_selinux_facts normalises `?` to "" before passing in,
+  # so the check itself sees "" — pin the same fail-on-Enforcing-without-
+  # confirmed-good-label behaviour for the bare `?` input as a belt-and-
+  # braces guard against the collector dropping the normalisation. Fedora
+  # 44 HITL 2026-06-19: nixpkgs coreutils stat returned `?` (no SELinux
+  # support compiled), the collector formerly passed `?` through, and
+  # this check formerly green-lit it as "labeled ?" — apply mode then
+  # skipped the SELinux step.
+  report=$(check_selinux_nix_label Enforcing "?") && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "selinux Enforcing + literal '?' should fail (rc=$status)"
+  case "$report" in "✗"*) ;; *) fail "selinux Enforcing + '?': expected ✗, got: $report" ;; esac
+
   # Aggregation: run_checks reports every prerequisite and exits zero only when
   # all pass. Args: systemd_version controllers_file auditd_state sudoers_file
   # userns_sysctl apparmor_profile_loaded task_never_active selinux_state

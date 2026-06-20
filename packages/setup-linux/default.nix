@@ -60,18 +60,30 @@ pkgs.writeShellScriptBin "setup-linux" # bash
     # `getenforce` (Enforcing / Permissive / Disabled / "" when absent) and
     # the SELinux *type* of a known /nix/store binary (default_t when no
     # fcontext rule exists, bin_t / usr_t after apply mode installs the
-    # /usr→/nix equivalence). Probe the type via `stat -c %C` on the nix
-    # binary itself, since it's the closest thing to a guaranteed-present
-    # store path on a host that has nix installed at all. `cut -d: -f3`
-    # extracts the type field from a system_u:object_r:<type>:s0 context.
+    # /usr→/nix equivalence). `cut -d: -f3` extracts the type field from a
+    # system_u:object_r:<type>:s0 context.
+    #
+    # `/usr/bin/stat` is the host's GNU stat, which Fedora/RHEL/Debian build
+    # with `--enable-selinux` so `%C` returns the real context. The nixpkgs
+    # coreutils we'd otherwise reach via `${"$"}{pkgs.coreutils}/bin/stat` is
+    # built without SELinux support and returns the string literal `?` —
+    # silently turning the check green and the apply into a no-op on Fedora
+    # (HITL 2026-06-19, fix follow-up to caa2cf4). We've already relied on
+    # the host tool chain for `getenforce`, so this is consistent.
     _collect_selinux_facts() {
     	selinux_state="$(getenforce 2>/dev/null || true)"
     	nix_store_label=""
     	_nix_bin="$(command -v nix 2>/dev/null || true)"
     	if [ -n "$_nix_bin" ]; then
     		_nix_bin="$(${pkgs.coreutils}/bin/readlink -f "$_nix_bin" 2>/dev/null || printf '%s' "$_nix_bin")"
-    		nix_store_label="$(${pkgs.coreutils}/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
+    		nix_store_label="$(/usr/bin/stat -c '%C' "$_nix_bin" 2>/dev/null \
     			| ${pkgs.coreutils}/bin/cut -d: -f3 || true)"
+    		# A literal `?` means stat couldn't read the context — treat as
+    		# "unprobed" so the check / apply behave the same as a missing
+    		# nix binary, rather than falsely green-lighting any non-empty
+    		# string. Important when /usr/bin/stat is missing or built
+    		# without SELinux support on some unusual host.
+    		[ "$nix_store_label" = "?" ] && nix_store_label=""
     	fi
     }
 
