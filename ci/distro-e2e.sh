@@ -24,6 +24,36 @@ distro=${1:?usage: distro-e2e.sh <debian|ubuntu|fedora>}
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# --- host dependencies: qemu-system-x86_64, qemu-img, cloud-localds ---
+# This harness drives KVM from the *host*. Provide the tools the Nix way when
+# possible — apt on a Nix host is nonsensical. If any are missing and `nix` is
+# available, re-exec the whole script inside
+# `nix shell nixpkgs#qemu nixpkgs#cloud-utils` (qemu -> qemu-system-x86_64 +
+# qemu-img; cloud-utils -> cloud-localds). Fall back to apt only on a non-Nix
+# apt host (a bare ubuntu CI runner); otherwise error with guidance.
+_have_host_tools() {
+  command -v qemu-system-x86_64 >/dev/null 2>&1 \
+    && command -v qemu-img >/dev/null 2>&1 \
+    && command -v cloud-localds >/dev/null 2>&1
+}
+if ! _have_host_tools; then
+  if command -v nix >/dev/null 2>&1 && [ -z "${_DISTRO_E2E_NIX:-}" ]; then
+    echo "== providing host deps via nix shell (qemu, cloud-utils) =="
+    exec env _DISTRO_E2E_NIX=1 nix \
+      --extra-experimental-features 'nix-command flakes' \
+      shell nixpkgs#qemu nixpkgs#cloud-utils --command bash "$0" "$@"
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo "== installing host deps via apt =="
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+  else
+    echo "::error::missing host tools (qemu-system-x86_64 / qemu-img / cloud-localds)" >&2
+    echo "  Nix:    nix shell nixpkgs#qemu nixpkgs#cloud-utils --command bash ci/distro-e2e.sh $distro" >&2
+    echo "  Debian: sudo apt-get install qemu-system-x86 qemu-utils cloud-image-utils" >&2
+    exit 1
+  fi
+fi
+
 # Image URLs track README's "Tested platforms" table; override per distro with
 # DISTRO_IMAGE_URL when a compose/point-release filename drifts (Fedora
 # especially carries a build suffix that changes between composes).
@@ -66,11 +96,6 @@ SSH_OPTS=(
   -o BatchMode=yes
   -o LogLevel=ERROR
 )
-
-# --- host dependencies (idempotent on a runner) ---
-echo "== installing host deps =="
-sudo apt-get update -qq
-sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
 
 # --- base image + copy-on-write overlay (don't mutate the cached base) ---
 echo "== fetching image: $IMAGE_URL =="

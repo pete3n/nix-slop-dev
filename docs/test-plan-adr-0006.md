@@ -111,6 +111,9 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 **Validation playbook** (run on an x86_64 box with `/dev/kvm` + network; start
 with Fedora — that is where the SELinux `/nix`-label HITL bugs lived):
 
+0. **Host deps** are auto-provided: on a Nix host the script re-execs itself
+   under `nix shell nixpkgs#qemu nixpkgs#cloud-utils` (no `apt`, no `sudo` — apt
+   on a Nix host is nonsensical); a bare apt runner falls back to `apt-get`.
 1. **Fedora first**: `bash ci/distro-e2e.sh fedora`. Then `debian`, `ubuntu`.
 2. **Risk points, in likely-to-bite order** (each has a no-edit knob now):
    - *Boot mode* — BIOS is the default; a UEFI-only image hangs with no SSH. Retry
