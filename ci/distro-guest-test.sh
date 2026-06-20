@@ -53,14 +53,15 @@ log "build sandboxed + oracle"
 nix build "$FLAKE#sandboxed" -o "$HOME/sb-link"
 SB="$HOME/sb-link/bin/sandboxed"
 
-# Run the oracle from /nix/store, NOT the $HOME checkout. Under `sandboxed`
-# (a systemd-run transient unit) Fedora SELinux lets init_t execve store
-# binaries (bin_t, after the --apply relabel) but not a $HOME script
-# (user_home_t -> status=203/EXEC). The store build matches the product (agents
-# live in /nix/store) and the NixOS test's writeShellScriptBin. Overrides the
-# $SRC path set at the top.
-nix build "$FLAKE#slop-oracle" -o "$HOME/oracle-link"
-ORACLE="$HOME/oracle-link/bin/slop-oracle"
+# Run the oracle by its PURE /nix/store path, NOT the $HOME checkout and NOT a
+# `-o` symlink under $HOME. `sandboxed` execs its command in a systemd-run unit
+# (init_t); Fedora SELinux lets init_t execve store binaries (bin_t, after the
+# --apply relabel) but cannot traverse a $HOME path (user_home_t) to reach one —
+# even a symlink whose target is bin_t fails at path resolution (203/EXEC).
+# `--no-link --print-out-paths` yields the bare store path (entirely under
+# /nix/store, searchable by init_t), exactly like the jail's setpriv ExecStart
+# that already passes. Overrides the $SRC path set at the top.
+ORACLE="$(nix build "$FLAKE#slop-oracle" --no-link --print-out-paths)/bin/slop-oracle"
 
 # Jail checks reach the oracle via the bound cwd (mount-cwd), so a copy in the
 # project dir is reachable as ./slop-oracle. (Inside the jail, bwrap/setpriv
