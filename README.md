@@ -38,29 +38,26 @@ The following are host specific platform setup instructions:
 
 ### Tested platforms
 
-Live per-platform functional-CI status (latest `main` run):
+Status badges reflect the latest `main` functional-CI run.
 
-[![nixos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/nixos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
+| OS                 | Version                          | Status |
+|--------------------|----------------------------------|--------|
+| NixOS              | 26.05                            | [![nixos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/nixos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
+| macOS (nix-darwin) | macOS 15 & 26 / nix-darwin 26.05 | [![macos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/macos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
+| Ubuntu             | 26.04                            | [![ubuntu](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/ubuntu.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
+| Debian             | 13                               | [![debian](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/debian.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
+| Fedora             | 44                               | [![fedora](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/fedora.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
+
+
+Template Status:
 [![templates](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/templates.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
-[![distros](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/distros.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
-[![macos](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/macos.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
-
-| OS                 | Version                     | Host setup                |
-|--------------------|-----------------------------|---------------------------|
-| NixOS              | 26.05                       | `nixosModules.sandboxed`  |
-| macOS (nix-darwin) | macOS 15 / nix-darwin 26.05 | `darwinModules.sandboxed` |
-| Ubuntu             | 26.04                       | `nix run …#setup-linux`   |
-| Debian             | 13                          | `nix run …#setup-linux`   |
-| Fedora             | 44                          | `nix run …#setup-linux`   |
 
 Other systemd-based Linux distributions with cgroup v2 should work —
 `setup-linux` probes for what it needs and reports what is missing.
 Please file an issue if `--check` passes on your distro but the wrapper
 fails at runtime.
 
-How these platforms are tested (the two-layer suite, the shared invariant
-oracle, and how to run each layer) is documented in
-[docs/testing.md](docs/testing.md).
+See [docs/testing.md](docs/testing.md) for more information on testing.
 
 Once setup, you can run a jailed agent directly with:
 
