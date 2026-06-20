@@ -49,13 +49,22 @@ log "setup-linux --check"
 nix run "$FLAKE#setup-linux" -- --check || echo "WARN: --check reported unmet prerequisites"
 
 # --- stage the sandboxed wrapper + the oracle ---
-log "build sandboxed"
+log "build sandboxed + oracle"
 nix build "$FLAKE#sandboxed" -o "$HOME/sb-link"
 SB="$HOME/sb-link/bin/sandboxed"
-chmod +x "$ORACLE"
 
-# Jail checks need the oracle on the jail PATH; the jail binds the cwd
-# (mount-cwd), so a copy in the project dir is reachable as ./slop-oracle.
+# Run the oracle from /nix/store, NOT the $HOME checkout. Under `sandboxed`
+# (a systemd-run transient unit) Fedora SELinux lets init_t execve store
+# binaries (bin_t, after the --apply relabel) but not a $HOME script
+# (user_home_t -> status=203/EXEC). The store build matches the product (agents
+# live in /nix/store) and the NixOS test's writeShellScriptBin. Overrides the
+# $SRC path set at the top.
+nix build "$FLAKE#slop-oracle" -o "$HOME/oracle-link"
+ORACLE="$HOME/oracle-link/bin/slop-oracle"
+
+# Jail checks reach the oracle via the bound cwd (mount-cwd), so a copy in the
+# project dir is reachable as ./slop-oracle. (Inside the jail, bwrap/setpriv
+# handle exec — SELinux init_t is not in that path.)
 mkdir -p "$PROJ"
 cp "$ORACLE" "$PROJ/slop-oracle"
 chmod +x "$PROJ/slop-oracle"

@@ -54,6 +54,15 @@
             sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
             setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
             prereq-guidance = pkgs.callPackage ./packages/prereq-guidance/default.nix { };
+            # The functional oracle as a /nix/store binary. The distro e2e
+            # harness runs it under `sandboxed` (a systemd-run transient unit);
+            # on Fedora SELinux the unit's init_t cannot execve a $HOME script
+            # (user_home_t), only store binaries (bin_t after the --apply
+            # relabel). Running the store-built oracle matches both the product
+            # (agents live in /nix/store) and the NixOS test's writeShellScriptBin.
+            slop-oracle = pkgs.writeShellScriptBin "slop-oracle" (
+              builtins.readFile ./tests/oracle/slop-oracle.sh
+            );
             default = self.packages.${system}.sandboxed;
           }
         else
