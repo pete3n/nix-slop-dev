@@ -49,7 +49,7 @@ jobs:
       matrix:
         test: [sandbox, wl-live-update, jail]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # nixosTest drives QEMU under KVM. GitHub's ubuntu runners expose
       # /dev/kvm but not group-accessible by default; this is the canonical
@@ -74,7 +74,7 @@ jobs:
     name: template functional
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -102,7 +102,7 @@ jobs:
         # Versions tracked in README's "Tested platforms" table.
         distro: [debian, ubuntu, fedora]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Enable KVM
         run: |
@@ -131,7 +131,7 @@ jobs:
     if: vars.MACOS_FUNCTIONAL_READY == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: cachix/install-nix-action@v30
         with:
