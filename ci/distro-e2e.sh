@@ -106,11 +106,21 @@ python3 -m http.server "$STUB_PORT" --bind 0.0.0.0 --directory "$STUBDIR" \
   >"$WORKDIR/stub.log" 2>&1 &
 STUB_PID=$!
 
-# --- boot. BIOS boot assumed; for a UEFI-only image install `ovmf` and add
-#     `-bios /usr/share/OVMF/OVMF_CODE.fd`. ---
+# --- boot. BIOS by default (the generic cloud images boot BIOS). For a
+#     UEFI-only image, point OVMF at the firmware code — no edit needed:
+#       OVMF=/usr/share/OVMF/OVMF_CODE.fd bash ci/distro-e2e.sh fedora
+#     (install the `ovmf`/`edk2-ovmf` package first; the path varies per host). ---
+firmware_args=()
+if [ -n "${OVMF:-}" ]; then
+  [ -r "$OVMF" ] || { echo "::error::OVMF=$OVMF is not readable" >&2; exit 1; }
+  firmware_args=(-bios "$OVMF")
+  echo "== using UEFI firmware: $OVMF =="
+fi
+
 echo "== booting $distro (ssh:$SSH_PORT stub:$STUB_PORT) =="
 qemu-system-x86_64 \
   -enable-kvm -cpu host -smp 2 -m 4096 \
+  ${firmware_args[@]+"${firmware_args[@]}"} \
   -drive file="$OVERLAY",if=virtio,format=qcow2 \
   -drive file="$WORKDIR/seed.img",if=virtio,format=raw \
   -netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \

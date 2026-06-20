@@ -92,12 +92,48 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 - **Side finding**: exposed and fixed a latent NAT-IP bug shared with
   `sandbox-functional.nix` — see §5.
 
-### 4.2 Validate + green the distro harness  🟡 needs KVM+network
+### 4.2 Validate + green the distro harness  🟡 needs KVM + network
 - **Behaviour**: the universal six hold on a real Debian/Ubuntu/Fedora host after
-  `setup-linux --apply` — i.e. the generated sudoers/auditd/SELinux/AppArmor
-  config actually loads and enforcement holds (the HITL-2026-06-19 bug class).
-- **Work**: run `ci/distro-e2e.sh fedora` first, resolve the script's risk points
-  (slirp reachability, boot mode, image URL drift), then `DISTRO_E2E_READY=true`.
+  `setup-linux --apply` — i.e. the generated sudoers / auditd / SELinux / AppArmor
+  config actually loads and enforcement then holds (the HITL-2026-06-19 bug class
+  the eval fixtures structurally cannot reach).
+- **Harness**: `ci/distro-e2e.sh <distro>` (host: fetch cloud image → boot KVM →
+  cloud-init a NOPASSWD user → copy the repo → run the guest script over SSH) →
+  `ci/distro-guest-test.sh` (guest: install Nix → `setup-linux --apply` → the
+  shared oracle across both boundaries). Stub = the host on the slirp gateway
+  `10.0.2.2` (non-loopback, not a resolver → denied by default).
+- **Static review**: internally consistent. The stub IP is fixed at `10.0.2.2`
+  (not `ip addr` discovery), so it sidesteps the NAT-IP class that bit 4.1/the
+  macOS run. `no-host-bin sudo` still holds under the executability rewrite
+  (sudo absent from the bubblewrap jail → PASS). `net-deny-udp`/`-raw` are not
+  exercised here (macOS extras). So the failure surface is **environmental**.
+
+**Validation playbook** (run on an x86_64 box with `/dev/kvm` + network; start
+with Fedora — that is where the SELinux `/nix`-label HITL bugs lived):
+
+1. **Fedora first**: `bash ci/distro-e2e.sh fedora`. Then `debian`, `ubuntu`.
+2. **Risk points, in likely-to-bite order** (each has a no-edit knob now):
+   - *Boot mode* — BIOS is the default; a UEFI-only image hangs with no SSH. Retry
+     with `OVMF=/usr/share/OVMF/OVMF_CODE.fd bash ci/distro-e2e.sh fedora` (install
+     `edk2-ovmf`/`ovmf`; path varies). **(new opt-in knob)**
+   - *Image URL drift* — Fedora's compose suffix (`…-44-1.5.…`) changes between
+     composes; override with `DISTRO_IMAGE_URL=… bash ci/distro-e2e.sh fedora`.
+   - *slirp reachability* — the guest must reach the host stub at `10.0.2.2`; if
+     `net-allow` fails but the boot/SSH are fine, suspect host firewall on the
+     stub port.
+   - *Disk/RAM headroom* — the guest Nix store wants room; `WORKDIR` prefers
+     `/mnt` (big runner scratch) over the small root fs.
+3. **How to read a failure** (the guest prints `PASS/FAIL <name>` per check):
+   - `net-deny` FAIL → the Sandbox let the stub through (boundary leak) — the real
+     bug class. `net-allow` PASS alongside confirms the stub was live.
+   - `violation-logged` FAIL → auditd not running / rules not loaded by
+     `--apply` (Fedora SELinux, the HITL area).
+   - `jail` FAIL → `setup-linux --apply` did not make the bubblewrap precondition
+     hold (Fedora SELinux `/nix` exec label, Ubuntu AppArmor userns).
+4. **On green for all three**, set `DISTRO_E2E_READY=true` to un-gate the CI jobs.
+
+Expect first-run friction (this harness has never executed) — the macOS run took
+three fix iterations; budget the same here.
 
 ### 4.3 Validate + green the macOS harness  🟡 needs a mac
 - **Behaviour**: the six + macOS extras hold under real Seatbelt.

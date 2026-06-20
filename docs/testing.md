@@ -115,8 +115,9 @@ Each script's header lists its risk points; summary:
 
 **Distro (`bash ci/distro-e2e.sh fedora` on a KVM box):**
 - slirp `10.0.2.2` → host stub reachability (the deny/allow targets).
-- cloud-image boot mode — BIOS assumed; a UEFI-only image needs `ovmf` +
-  `-bios` (one commented line in the script).
+- cloud-image boot mode — BIOS by default; a UEFI-only image hangs (no SSH).
+  Retry with `OVMF=/usr/share/OVMF/OVMF_CODE.fd bash ci/distro-e2e.sh fedora`
+  (install `edk2-ovmf`/`ovmf` first; the path varies per host).
 - cloud-image URLs — Fedora's compose suffix drifts; override with
   `DISTRO_IMAGE_URL`.
 - guest disk/RAM headroom for the Nix store (`WORKDIR` prefers `/mnt`).
