@@ -185,10 +185,12 @@ check_no_host_bin() {
 		pass no-host-bin "$name absent from the confined PATH — cannot execute"
 	fi
 	# Present on PATH: attempt a harmless exec (--version: no escalation, no
-	# prompt; </dev/null so a stray stdin read cannot hang). A refused exec —
-	# rc 126/127, or a sandbox/loader "operation not permitted" / "permission
-	# denied" — is confined; the program actually running is the leak.
-	out=$("$path" --version </dev/null 2>&1)
+	# prompt). A refused exec — rc 126/127, or a sandbox/loader "operation not
+	# permitted" / "permission denied" — is confined; the program actually
+	# running is the leak. NB: no stdin redirect — the macOS jail denies reading
+	# /dev/null (it grants write only), and a `</dev/null` would itself fail and
+	# mask the result; a denied exec never runs, so there is no stdin to hang on.
+	out=$("$path" --version 2>&1)
 	rc=$?
 	case "$rc" in
 		126 | 127) pass no-host-bin "$name on PATH but exec refused (rc $rc) — confined" ;;
