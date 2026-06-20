@@ -49,7 +49,7 @@ These are the per-platform additions ADR-0006 calls out explicitly.
 | Behaviour | Platform | Covered by | Status |
 |---|---|---|---|
 | Raw (non-proxy) TCP fails closed | macOS (bonus on Linux) | `net-deny-raw` in `macos-functional.sh` | 🟡 |
-| **UDP** fails closed | macOS | `net-deny-udp` (echo stub) in `macos-functional.sh` | 🟡 (mechanics verified on Linux; Seatbelt verdict pending a mac) |
+| **UDP** fails closed | macOS | `net-deny-udp` (echo stub) in `macos-functional.sh` | ✅ verified on aarch64-darwin (Seatbelt denies the UDP connect) |
 | `--wl-add` **persists** to next launch | Linux | `sandbox-functional.nix` (`--wl-add` → re-probe) | ✅ |
 | `--wl-add` **live-updates a running** unit | Linux | `sandbox-wl-live-update.nix` (deny-at-launch → live `set-property` → reach, same unit) | ✅ |
 | `--wl-add` **persists** to next launch | macOS | `macos-functional.sh` (wl-add-persists) | 🟡 |
@@ -117,7 +117,7 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
   (shellHook detects login via cfgDir; preflight has no clobbering symlink).
   Functional coverage needs an automatable login — design only until then.
 
-### 4.6 macOS UDP fails closed  🟡 wired; Seatbelt verdict pending a mac
+### 4.6 macOS UDP fails closed  ✅ DONE (verified on aarch64-darwin)
 - **Behaviour**: a UDP datagram from inside the jail does not escape — the
   Seatbelt profile is `(deny network-outbound)` save the proxy's localhost port
   (ADR-0003), so UDP has no allow path even with `-a` (ADR said "UDP/raw"; only
@@ -125,11 +125,11 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 - **Covered by**: `net-deny-udp` oracle check (parallel to `net-deny-raw`) +
   harness wiring in `ci/macos-functional.sh` (loopback UDP echo stub, an
   unconfined positive control, then the confined `-a` check expecting denial).
-- **Status**: the probe **mechanics are verified on Linux** — a reachable echo
-  reads as "leaked" (fail), a dead/denied endpoint as "failed closed" (pass).
-  The macOS Seatbelt verdict can only be observed on a real mac (gated behind
-  `MACOS_FUNCTIONAL_READY`). First-run risk points are in the harness header
-  (loopback openness, `timeout`/`dd` on the jail PATH).
+- **Status**: GREEN on aarch64-darwin. Seatbelt denies the UDP `connect` with
+  "Operation not permitted"; the unconfined positive control confirms the echo
+  stub was alive, so the "failed closed" is denial, not a dead stub. Probe
+  mechanics were also verified on Linux (reachable → leaked; dead/denied →
+  failed closed).
 - **Probe design notes** (bugs found + fixed while building it): socket I/O runs
   in a subshell because a refused `exec 3<>/dev/udp/...` is a *fatal* redirection
   error; and the reply is read with `dd bs=… count=1` (one datagram per read())
@@ -168,11 +168,44 @@ Honest status, because "implemented" ≠ "observed enforcing":
 - **Distro + macOS harnesses** — fully written but **never executed on real
   infra**; both gated. Their oracle assertions *are* the failing tests; making
   them pass on real hardware is slices 4.2/4.3.
-- **No ADR-named behaviour is unbacked any more.** macOS UDP (4.6) now has a
-  check whose mechanics are verified on Linux; only its Seatbelt verdict awaits a
-  mac. The roadmap-skeleton guard (4.7) is closed by `roadmap-skeletons-guarded`.
-  What remains is *validation on real infra* (distro/macOS harnesses, slices
-  4.2–4.5), not missing tests.
+- **No ADR-named behaviour is unbacked any more.** macOS UDP (4.6) is verified on
+  aarch64-darwin; the roadmap-skeleton guard (4.7) is closed by
+  `roadmap-skeletons-guarded`. What remains is *validation on real infra*
+  (distro harness 4.2, the rest of the macOS run 4.4/4.5) — plus the open finding
+  below.
+
+## 7. Open finding — macOS jail leaks `sudo` on PATH (invariant #6)
+
+First-run of `ci/macos-functional.sh` on aarch64-darwin passed every check
+**except** invariant #6:
+
+```
+FAIL no-host-bin: sudo is on PATH inside the jail — host binary leaked
+```
+
+This is structural, not a flake: the macOS Sandbox/Jail profile is `(allow
+default)` with targeted denies (ADR-0004 read-confinement), so `/usr/bin/sudo`
+stays readable/executable and on PATH — whereas the Linux bubblewrap jail
+*curates* mounts so host binaries are simply absent. It is exactly the
+"one invariant, two enforcement models that diverge" risk ADR-0006 set out to
+contain. It currently **blocks `MACOS_FUNCTIONAL_READY`** (the jail check, and
+thus the whole script, exits non-zero).
+
+Two ways to resolve, a decision for the maintainer (not yet actioned):
+
+- **(A) invariant #6 is Linux-shaped.** On macOS the equivalent guarantee is
+  "sensitive host *paths* are unreadable" (already asserted by `path-hidden`) and
+  "no non-proxy egress" — not "host binary absent from PATH". If so, the macOS
+  jail check should drop `no-host-bin sudo` (or replace it with a macOS-meaningful
+  exec/escalation assertion), and the divergence should be documented.
+- **(B) real hardening gap.** If an agent reaching `/usr/bin/sudo` inside the
+  Jail is considered a genuine confinement weakness, the Seatbelt jail fragment
+  should deny exec of host privilege tools — a production change with its own
+  test.
+
+Until decided, the macOS harness stays gated. Everything else in the macOS run
+(`net-deny`, `violation-logged`, `net-allow`, `path-rw`, `path-hidden`,
+`net-deny-raw`, `net-deny-udp`, `tmpdir-redirect`, `wl-add-persists`) passed.
 
 ## 6. Adding an invariant
 

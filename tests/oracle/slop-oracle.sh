@@ -135,10 +135,15 @@ check_net_deny_udp() {
 	#     on a newline-less datagram times out without assigning $reply.
 	# `timeout` bounds the wait (already a dependency of net-deny-raw); any bytes
 	# carrying the token mean the datagram escaped and was echoed back.
+	# Group-redirect stderr to /dev/null: a Seatbelt-denied connect makes
+	# `exec 3<>/dev/udp/...` print a fatal redirection error ("Operation not
+	# permitted") that a per-command `2>/dev/null` does not fully suppress.
 	reply=$(
-		exec 3<>"/dev/udp/$host/$port" 2>/dev/null || exit 0
-		printf '%s' "$token" >&3 2>/dev/null || exit 0
-		timeout "$NET_TIMEOUT" dd bs=65535 count=1 <&3 2>/dev/null || true
+		{
+			exec 3<>"/dev/udp/$host/$port" || exit 0
+			printf '%s' "$token" >&3 || exit 0
+			timeout "$NET_TIMEOUT" dd bs=65535 count=1 <&3 || true
+		} 2>/dev/null
 	)
 	case "$reply" in
 		*"$token"*) fail net-deny-udp "UDP echo from $host:$port returned the token — egress leaked" ;;

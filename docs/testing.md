@@ -104,7 +104,7 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
 | NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
 | Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | implemented, **awaits one-time KVM validation**, gated |
-| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | implemented, **awaits one-time mac validation**, gated |
+| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | run once on aarch64-darwin: all pass **except `no-host-bin sudo`** (jail leaks sudo on PATH — see the test plan's open finding). Stays gated until resolved. |
 
 ## First-run validation playbook (for the next agent)
 
