@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: [sandbox, jail]
+        test: [sandbox, wl-live-update, jail]
     steps:
       - uses: actions/checkout@v4
 

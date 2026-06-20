@@ -474,6 +474,15 @@
             sandboxedModule = self.nixosModules.sandboxed;
           };
 
+          # The `--wl-add` LIVE-UPDATE half (ADR-0006 slice 4.1): a host denied
+          # at launch becomes reachable from inside the SAME still-running
+          # sandbox unit after `sandboxed --wl-add` set-property's it — the
+          # runtime counterpart to sandbox-functional.nix's persistence half.
+          wl-live-update = import ./tests/sandbox-wl-live-update.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
+
           # Jail (filesystem) boundary: path-hidden, project-rw,
           # host-binary-absent. Drives the raw bubblewrap launcher via
           # `jailed-shell -c` with the oracle on the jail PATH.

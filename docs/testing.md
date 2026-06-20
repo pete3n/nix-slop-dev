@@ -11,6 +11,12 @@ for the rationale and trade-offs):
   (systemd `IPAddressDeny`, bubblewrap, auditd, Seatbelt). Does **not** gate
   PRs; runs on merge-to-main, nightly, manual dispatch, and release tags.
 
+This page is the operational guide (how to run each layer, the CI gate
+variables, the first-run playbook). For the behaviour-by-behaviour traceability
+matrix — every ADR-0006 invariant mapped to its covering test and status, plus
+the ordered red→green TDD slices for what's left — see the
+[ADR-0006 test plan](test-plan-adr-0006.md).
+
 Why two layers: the eval checks are cheap and run anywhere, but a pure
 `nix flake check` cannot reach the runtime bugs that actually ship (a jail that
 doesn't block a path, a sandbox that lets a denied host through, a `setup-linux`
@@ -53,9 +59,10 @@ so the suite is hermetic and cannot flake on network.
 nix flake check -L
 
 # Functional / NixOS — hermetic, run today on any x86_64 host with /dev/kvm.
-nix build -L .#functionalTests.x86_64-linux.sandbox    # network boundary (#1/#2/#3 + wl persistence)
-nix build -L .#functionalTests.x86_64-linux.jail       # filesystem boundary (#4/#5/#6)
-nix build -L .#functionalTests.x86_64-linux.template   # both exported templates' jails
+nix build -L .#functionalTests.x86_64-linux.sandbox        # network boundary (#1/#2/#3 + wl persistence)
+nix build -L .#functionalTests.x86_64-linux.wl-live-update # --wl-add live-updates a RUNNING sandbox unit
+nix build -L .#functionalTests.x86_64-linux.jail           # filesystem boundary (#4/#5/#6)
+nix build -L .#functionalTests.x86_64-linux.template       # both exported templates' jails
 
 # Functional / distros — boots a real cloud-image VM (needs /dev/kvm + network).
 bash ci/distro-e2e.sh fedora     # or debian | ubuntu
@@ -92,7 +99,8 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | Component | State |
 |---|---|
 | Eval gate (`pr-checks.yml`) | real |
-| NixOS functional: `sandbox`, `jail`, `template` | real, hermetic, runs today |
+| NixOS functional: `wl-live-update` | real, hermetic, **verified green on a KVM builder** |
+| NixOS functional: `sandbox`, `jail`, `template` | real, hermetic; `sandbox` NAT-IP bug fixed (needs a confirming run — see below) |
 | Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | implemented, **awaits one-time KVM validation**, gated |
 | macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | implemented, **awaits one-time mac validation**, gated |
 
@@ -137,10 +145,16 @@ Framed as red→green for the [tdd](../) skill. Each is independent.
 4. **aarch64 functional smoke** (optional) — ADR-0006 keeps aarch64 eval-only;
    promote to a single deny-closed + jail-launch smoke if an arch-specific
    runtime bug ever appears.
-5. **`--wl-add` live-update on Linux** — `sandbox-functional.nix` covers
-   whitelist *persistence* (next launch) but not the live `set-property` update
-   of a *running* transient unit. Needs a backgrounded sandbox in the
-   `nixosTest`.
+5. ~~**`--wl-add` live-update on Linux**~~ — DONE. `tests/sandbox-wl-live-update.nix`
+   (`functionalTests.x86_64-linux.wl-live-update`) backgrounds a sandbox, runs
+   `--wl-add` from outside, and re-probes the still-running unit. Green on a KVM
+   builder; no production change needed (the `set-property` path already worked).
+6. **Confirm `sandbox` after the NAT-IP fix** — `sandbox-functional.nix` (and the
+   now-passing `wl-live-update`) selected the wrong IP on a builder whose test
+   VMs get a QEMU user-mode NAT: `ip … | head -1` picked the per-VM `10.0.2.15`
+   instead of the shared `192.168.x` VLAN, so the sanity anchor failed. Both are
+   now fixed (`grep 192.168`); `sandbox` needs one confirming run to retire the
+   "green today" caveat.
 
 ## Adding an invariant
 

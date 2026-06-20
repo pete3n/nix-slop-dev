@@ -82,11 +82,14 @@ pkgs.testers.runNixOSTest {
     agent.wait_for_unit("multi-user.target")
     agent.wait_for_unit("auditd.service")
 
-    # Discover the stub's address on the test VLAN (interface-agnostic:
-    # first global-scope IPv4). Used as a raw IP so no DNS is involved —
-    # the deny path is exercised purely by the cgroup IP filter.
+    # Discover the stub's address on the shared test VLAN (eth1). Used as a raw
+    # IP so no DNS is involved — the deny path is exercised purely by the cgroup
+    # IP filter. Must skip the per-VM QEMU user-mode NAT (eth0 = 10.0.2.15,
+    # identical and isolated on every node); a bare `head -1` over all global
+    # IPs would wrongly pick it. The inter-node net is numbered 192.168.<vlan>.<n>.
     server_ip = server.succeed(
-        "ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1"
+        "ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1"
+        " | grep 192.168 | head -1"
     ).strip()
 
     url = f"http://{server_ip}/"
@@ -117,8 +120,9 @@ pkgs.testers.runNixOSTest {
     )
 
     # Linux extra (whitelist persistence half): a --wl-add'd host is allowed on
-    # a subsequent run with no -a. The live-update-of-a-running-unit half needs
-    # a backgrounded long-lived sandbox and is deferred to a follow-on test.
+    # a subsequent run with no -a. The live-update-of-a-running-unit half (a
+    # --wl-add taking effect on an already-running sandbox) is covered by the
+    # follow-on test tests/sandbox-wl-live-update.nix.
     agent.succeed(f"su - agent -c 'sandboxed --wl-add {server_ip}'")
     agent.succeed(
         f"su - agent -c 'sandboxed -q -- slop-oracle net-allow {url}'"
