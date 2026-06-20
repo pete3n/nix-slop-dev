@@ -48,10 +48,8 @@ Status badges reflect the latest `main` functional-CI run.
 | Debian             | 13                               | [![debian](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/debian.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
 | Fedora             | 44                               | [![fedora](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/fedora.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
 
-The three distros are badged separately because their host-confinement
-primitives differ (Ubuntu AppArmor, Fedora SELinux, Debian neither). The
-exported flake templates — `claude-code` and `claude-code-nvim-dev` — are
-functionally tested as one suite:
+
+Template Status:
 [![templates](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/templates.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
 
 Other systemd-based Linux distributions with cgroup v2 should work —
@@ -59,9 +57,7 @@ Other systemd-based Linux distributions with cgroup v2 should work —
 Please file an issue if `--check` passes on your distro but the wrapper
 fails at runtime.
 
-How these platforms are tested (the two-layer suite, the shared invariant
-oracle, and how to run each layer) is documented in
-[docs/testing.md](docs/testing.md).
+See [docs/testing.md](docs/testing.md) for more information on testing.
 
 Once setup, you can run a jailed agent directly with:
 
