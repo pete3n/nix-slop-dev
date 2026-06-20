@@ -88,6 +88,14 @@ rec {
       # (mkdir-only, no cleanup); Linux keeps the tmpfs default.
       # HITL 2026-06-19.
       cfgDirCombinator ? null
+    , # When false, omit the shared-credentials symlink graft below.
+      # Sound only where cfgDir persists on its own (Darwin's ensure-dir):
+      # claude writes .credentials.json atomically (write .tmp + rename),
+      # which detaches a single-file symlink, and the next launch's
+      # `ln -sfn -f` preflight would delete the real token. Linux keeps it
+      # (true) — its tmpfs cfgDir has no other persistence path.
+      # HITL 2026-06-19.
+      shareCredentialsFile ? true
     ,
     }:
     let
@@ -120,11 +128,21 @@ rec {
     ++ [
       (write-text (noescape "${cfgDir}/settings.json") claudeSettings)
       (write-text (noescape "${cfgDir}/CLAUDE.md") claudeMd)
+    ]
 
-      # Shared identity, grafted into the per-project config dir.
-      # Host file must exist before launch (touched in shellHook).
+    # Shared identity, grafted into the per-project config dir via a
+    # symlink to one host file. Only sound where cfgDir is ephemeral
+    # (Linux tmpfs), where the symlink is the sole persistence path. On
+    # Darwin cfgDir persists (ensure-dir) and the symlink is harmful:
+    # claude writes .credentials.json atomically (write .tmp + rename),
+    # replacing the symlink with a regular file so the shared target
+    # never fills, and the next launch's `ln -sfn -f` preflight deletes
+    # the real token. Darwin sets shareCredentialsFile=false and lets the
+    # token live in the persistent cfgDir directly. HITL 2026-06-19.
+    ++ lib.optional shareCredentialsFile
       (rw-bind (noescape "${sharedDir}/.credentials.json") (noescape "${cfgDir}/.credentials.json"))
 
+    ++ [
       # Per-project persistent state.
       (try-readwrite (noescape "${cfgDir}/.claude.json"))
       (try-readwrite (noescape "${cfgDir}/.last-cleanup"))

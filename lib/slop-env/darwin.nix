@@ -103,6 +103,10 @@ let
           # claude state across runs. ensure-dir keeps the dir between
           # invocations. HITL 2026-06-19.
           cfgDirCombinator = jail.combinators.ensure-dir;
+          # cfgDir persists across runs here, so the token lives in it
+          # directly — the shared-file symlink graft would only clobber
+          # it (see shared.nix). HITL 2026-06-19.
+          shareCredentialsFile = false;
         })
         ++ darwinJailExtras
         ++ extraCombinators;
@@ -160,9 +164,7 @@ let
       claude = pkgs.writeShellScriptBin "claude" ''
         set -euo pipefail
         ${configDirSetup}
-        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        mkdir -p "$CLAUDE_CONFIG_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q \
           --allow api.anthropic.com \
@@ -174,29 +176,30 @@ let
       jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
         set -euo pipefail
         ${configDirSetup}
-        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        mkdir -p "$CLAUDE_CONFIG_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedShell}/bin/sandboxed-jailed-shell "$@"
       '';
 
       # Darwin shellHook: skip Linux-only prereq checks (Seatbelt is
-      # daemonless and runs unprivileged). Claude credentials check +
-      # ready banner are identical to Linux.
+      # daemonless and runs unprivileged). Unlike Linux (shared-file
+      # credentials over a tmpfs cfgDir), the login check here targets the
+      # persistent per-project cfgDir — see shareCredentialsFile above.
       shellHook = ''
         # Project unique config
         export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
-        export CLAUDE_SHARED_DIR="$HOME/.local/state/claude/shared"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR"
-        touch "$CLAUDE_SHARED_DIR/.credentials.json"
+        mkdir -p "$CLAUDE_CONFIG_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
         # Setup checks
         _setup_ok=1
 
-        # Check Claude credentials
-        if [ ! -s "$CLAUDE_SHARED_DIR/.credentials.json" ]; then
+        # Check Claude credentials. The jailed claude persists its OAuth
+        # token as a regular file in the per-project config dir (cfgDir is
+        # a persistent ensure-dir on Darwin), so detect login by testing
+        # that file — NOT a shared sidecar, which claude's atomic
+        # write-and-rename never populates. HITL 2026-06-19.
+        if [ ! -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then
         	printf '\033[1;36mℹ Claude Code credentials not found.\033[0m\n'
         	printf '  Run claude to complete OAuth login on first use.\n\n'
         	_setup_ok=0

@@ -93,9 +93,9 @@
             binsActual = builtins.attrNames (
               slop.mkBins {
                 projectName = "byteq-test";
-                claudeMdFile = ../templates/claude-code/slop-env/claude-config/CLAUDE.md;
-                rulesDir = ../templates/claude-code/slop-env/claude-config/rules;
-                skillsDir = ../templates/claude-code/slop-env/claude-config/skills;
+                claudeMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
+                rulesDir = ./templates/claude-code/slop-env/claude-config/rules;
+                skillsDir = ./templates/claude-code/slop-env/claude-config/skills;
               }
             );
           in
@@ -174,6 +174,41 @@
                 ''
               else
                 throw "lib.slopEnv mkBins shape regressed on Darwin. expected: ${builtins.concatStringsSep " " binsExpected} actual: ${builtins.concatStringsSep " " binsActual}";
+
+            # Regression (HITL 2026-06-19): the jailed-claude OAuth token
+            # must persist in the per-project cfgDir, not via a shared-file
+            # symlink. claude writes .credentials.json atomically (write
+            # .tmp + rename), which (a) detaches a single-file symlink so
+            # the token lands as a regular file in cfgDir and the shared
+            # target never fills, and (b) is then deleted by the next
+            # launch's `ln -sfn -f` preflight — so login was neither
+            # detected (banner checked the empty shared file) nor preserved
+            # (relaunch clobbered the real token). Two invariants lock it:
+            #   1. the emitted shellHook detects login via the per-project
+            #      $CLAUDE_CONFIG_DIR/.credentials.json, not a shared sidecar;
+            #   2. the rendered jail preflight contains no .credentials.json
+            #      symlink to clobber.
+            darwin-creds-persist-in-cfgdir =
+              let
+                # Uses lib defaults (lib/slop-env/defaults/*) for
+                # claudeMd/rules — in-repo, so no template path needed; this
+                # check only inspects the shellHook + jail preflight, which
+                # don't depend on the bundled config contents.
+                bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
+                checksConfigDir =
+                  pkgs.lib.hasInfix ''[ ! -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]'' bins.shellHook;
+                noSharedCredCheck =
+                  !(pkgs.lib.hasInfix "CLAUDE_SHARED_DIR/.credentials.json" bins.shellHook);
+                noCredSymlink =
+                  !(builtins.any (line: pkgs.lib.hasInfix ".credentials.json" line)
+                    bins.jailedClaude.jailData.preflight);
+              in
+              if checksConfigDir && noSharedCredCheck && noCredSymlink then
+                pkgs.runCommand "darwin-creds-persist-in-cfgdir" { } ''
+                  echo "login detection targets cfgDir; no credentials symlink in preflight" > $out
+                ''
+              else
+                throw "darwin creds regression: checksConfigDir=${pkgs.lib.boolToString checksConfigDir} noSharedCredCheck=${pkgs.lib.boolToString noSharedCredCheck} noCredSymlink=${pkgs.lib.boolToString noCredSymlink}";
           }
         else
           let
@@ -220,9 +255,9 @@
               let
                 bins = slop.mkBins {
                   projectName = "byteq-test";
-                  claudeMdFile = ../templates/claude-code/slop-env/claude-config/CLAUDE.md;
-                  rulesDir = ../templates/claude-code/slop-env/claude-config/rules;
-                  skillsDir = ../templates/claude-code/slop-env/claude-config/skills;
+                  claudeMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
+                  rulesDir = ./templates/claude-code/slop-env/claude-config/rules;
+                  skillsDir = ./templates/claude-code/slop-env/claude-config/skills;
                 };
                 expectedKeys = [
                   "claude"
