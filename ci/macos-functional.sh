@@ -78,6 +78,27 @@ while True:
 UDP_PID=$!
 trap 'kill "$STUB_PID" "$UDP_PID" 2>/dev/null || true' EXIT INT TERM
 
+# Readiness gate: the loopback stub must accept connections from the HOST
+# (unconfined) before any check runs. On the aarch64 macos-26 runner it never
+# came up — net-allow then fails and is misread as a boundary break, when the
+# truth is "no stub". Fail fast with the cause (stub log, python, listeners,
+# firewall state) instead of a misleading boundary verdict.
+stub_up=0
+attempt=0
+while [ "$attempt" -lt 20 ]; do
+  if curl -sf --max-time 2 "$STUB_URL" >/dev/null 2>&1; then stub_up=1; break; fi
+  sleep 0.5
+  attempt=$((attempt + 1))
+done
+if [ "$stub_up" -ne 1 ]; then
+  echo "::error::loopback stub $STUB_URL never came up — CI infra problem, not a boundary result" >&2
+  echo "## stub.log";    cat "$STUBDIR/stub.log" 2>/dev/null || true
+  echo "## python3";     command -v python3 || true; python3 --version 2>&1 || true
+  echo "## listeners";   { lsof -nP -iTCP:"$STUB_PORT" 2>/dev/null; netstat -an 2>/dev/null | grep -w "$STUB_PORT"; } || true
+  echo "## firewall";    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate --getstealthmode 2>/dev/null || true
+  exit 1
+fi
+
 # Plant a host secret OUTSIDE the jail's curated view.
 SECRET="$HOME/.ssh/id_secret"
 mkdir -p "$HOME/.ssh"

@@ -148,6 +148,19 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
+      # The macos-26 runner drops loopback TCP to the test stub/proxy
+      # (net-allow times out; the host can't reach its own stub). The macOS
+      # Application Firewall is the prime suspect and is irrelevant to what we
+      # test (a hermetic loopback boundary), so record its state and disable it.
+      # Harmless on runners where it was already off.
+      - name: disable macOS Application Firewall
+        run: |
+          fw=/usr/libexec/ApplicationFirewall/socketfilterfw
+          echo "before:"; sudo "$fw" --getglobalstate --getstealthmode || true
+          sudo "$fw" --setglobalstate off || true
+          sudo "$fw" --setstealthmode off || true
+          echo "after:";  sudo "$fw" --getglobalstate --getstealthmode || true
+
       # The mac runner IS the Darwin host — no nested VM. Builds the Darwin
       # Slop Env, stands up a loopback stub, and runs the shared oracle under
       # the sandboxed-jailed wrapper so Seatbelt actually enforces.
