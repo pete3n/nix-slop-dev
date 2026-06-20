@@ -96,7 +96,7 @@ pkgs.testers.runNixOSTest {
         )
         if extra_check:
             cmd += f" && {extra_check}"
-        agent.succeed(f'''su - agent -c 'cd {proj} && {shell_bin} -c "{cmd}"' ''')
+        agent.succeed(f"su - agent -c 'cd {proj} && {shell_bin} -c \"{cmd}\"' ")
 
     # claude-code template jail: the universal jail invariants.
     template_jail("${claudeTemplate}/bin/jailed-shell", "/home/agent/proj-claude")
