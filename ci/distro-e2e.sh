@@ -63,7 +63,10 @@ case "$distro" in
   ubuntu)
     IMAGE_URL=${DISTRO_IMAGE_URL:-https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img} ;;
   fedora)
-    IMAGE_URL=${DISTRO_IMAGE_URL:-https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.5.x86_64.qcow2} ;;
+    # NB: Fedora's compose suffix (…-44-1.7) drifts between composes; when this
+    # 404s, find the live filename and override with DISTRO_IMAGE_URL (see the
+    # ADR-0006 test plan's validation playbook).
+    IMAGE_URL=${DISTRO_IMAGE_URL:-https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2} ;;
   *)
     echo "::error::unknown distro '$distro' (expected debian|ubuntu|fedora)" >&2; exit 2 ;;
 esac

@@ -119,7 +119,7 @@ with Fedora — that is where the SELinux `/nix`-label HITL bugs lived):
    - *Boot mode* — BIOS is the default; a UEFI-only image hangs with no SSH. Retry
      with `OVMF=/usr/share/OVMF/OVMF_CODE.fd bash ci/distro-e2e.sh fedora` (install
      `edk2-ovmf`/`ovmf`; path varies). **(new opt-in knob)**
-   - *Image URL drift* — Fedora's compose suffix (`…-44-1.5.…`) changes between
+   - *Image URL drift* — Fedora's compose suffix (`…-44-1.7.…`) changes between
      composes; override with `DISTRO_IMAGE_URL=… bash ci/distro-e2e.sh fedora`.
    - *slirp reachability* — the guest must reach the host stub at `10.0.2.2`; if
      `net-allow` fails but the boot/SSH are fine, suspect host firewall on the
