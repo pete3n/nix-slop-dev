@@ -42,3 +42,22 @@ existing-flake projects). Combines both confinement boundaries into one
 artifact; an agent run outside a Slop Env has neither.
 _Avoid_: agent shell (overloaded — used generically for any AI session),
 sandbox (collides with Sandbox), jail (collides with Jail)
+
+**Exchange**:
+The per-project, host-visible directory through which a user and a jailed
+agent deliberately pass files in either direction — the user dropping inputs
+in for the agent to ingest, the agent leaving outputs (e.g. handoff
+documents) for the user to collect. Persists across agent runs and lives
+outside both the project working tree and the agent's private temp. Scoped
+per Slop Env (per `projectName`), not shared across projects.
+_Avoid_: tmp, scratch (that's Scratch), share (collides with the
+shared-credentials concept)
+
+**Scratch**:
+The per-project temp directory a jailed agent writes to by default, made
+host-visible so the user can inspect what the agent produced. Throwaway, not
+a deliberate handoff channel (that's the Exchange). Exists because a Jail's
+own private temp lives in the agent's mount namespace and is unreachable
+from the host.
+_Avoid_: tmp (unqualified), Exchange (deliberate and persistent — different
+intent)

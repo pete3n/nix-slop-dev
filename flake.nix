@@ -6,6 +6,13 @@
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
 
+    # Review-first terminal diff viewer (ADR-0007). Taken once here and
+    # re-exported as packages.${system}.hunk so templates and the outer
+    # dev-shell flake consume it through nix-slop-dev without their own
+    # hunk input. follows nixpkgs per hunk's own README guidance.
+    hunk.url = "github:modem-dev/hunk";
+    hunk.inputs.nixpkgs.follows = "nixpkgs";
+
     # flake-utils and gen-luarc are not used by lib or runtime packages.
     # They satisfy the nvim template's input signature when
     # tests/template-nvim-dev-drv.nix invokes its outputs function
@@ -22,6 +29,7 @@
       llm-agents,
       flake-utils,
       gen-luarc,
+      hunk,
       ...
     }:
     let
@@ -63,6 +71,9 @@
             slop-oracle = pkgs.writeShellScriptBin "slop-oracle" (
               builtins.readFile ./tests/oracle/slop-oracle.sh
             );
+            # Re-export (ADR-0007): dual-sided review tool consumed via
+            # projectPkgs by the templates + outer dev-shell flake.
+            hunk = hunk.packages.${system}.default;
             default = self.packages.${system}.sandboxed;
           }
         else
@@ -72,6 +83,9 @@
           {
             inherit sandbox-proxy;
             sandboxed = pkgs.callPackage ./packages/sandboxed-darwin/default.nix { inherit sandbox-proxy; };
+            # Re-export (ADR-0007): dual-sided review tool consumed via
+            # projectPkgs by the templates + outer dev-shell flake.
+            hunk = hunk.packages.${system}.default;
             default = self.packages.${system}.sandboxed;
           }
       );
@@ -242,6 +256,29 @@
                 ''
               else
                 throw "darwin TMPDIR regression: jail does not forward TMPDIR into the sandbox (env -i would drop it)";
+
+            # Exchange parity (CONTEXT.md): CLAUDE_EXCHANGE_DIR is the
+            # deliberate user<->agent handoff channel. Like TMPDIR it is
+            # exported by the launcher into the persistent cfgDir and
+            # forwarded into the jail (now via the shared combinator list).
+            darwin-exchange-forwarded =
+              let
+                bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
+                forwardsExchange =
+                  builtins.elem "CLAUDE_EXCHANGE_DIR" bins.jailedClaude.jailData.envForward;
+              in
+              if forwardsExchange then
+                pkgs.runCommand "darwin-exchange-forwarded" { } ''
+                  launcher=${bins.claude}/bin/claude
+                  if ! ${pkgs.gnugrep}/bin/grep -qF 'export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"' "$launcher"; then
+                    echo "FAIL: claude launcher doesn't export CLAUDE_EXCHANGE_DIR into cfgDir" >&2
+                    cat "$launcher" >&2
+                    exit 1
+                  fi
+                  echo "CLAUDE_EXCHANGE_DIR exported into cfgDir and forwarded into the jail" > $out
+                ''
+              else
+                throw "darwin exchange regression: jail does not forward CLAUDE_EXCHANGE_DIR into the sandbox";
           }
         else
           let
@@ -415,6 +452,34 @@
                 ''
               else
                 throw "extraSandboxedEnvForwards arg did not add an -e flag to the claude() sandboxed call";
+
+            # Scratch + Exchange parity (CONTEXT.md): the Linux launchers and
+            # shellHook must export TMPDIR (Scratch) and CLAUDE_EXCHANGE_DIR
+            # (Exchange) into the per-project cfgDir and forward both through
+            # the sandboxed wrapper (`-e`), so the jail re-applies them after
+            # `env -i`. Without the forward the agent's temp and the handoff
+            # channel fall back to the jail-private /tmp the user can't reach.
+            lib-slop-env-scratch-exchange =
+              let
+                bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
+                hook = bins.shellHook;
+                exportsTmpdir = pkgs.lib.hasInfix ''export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"'' hook;
+                exportsExchange =
+                  pkgs.lib.hasInfix ''export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"'' hook;
+                forwardsBoth = pkgs.lib.hasInfix "-e TMPDIR -e CLAUDE_EXCHANGE_DIR" hook;
+              in
+              if exportsTmpdir && exportsExchange && forwardsBoth then
+                pkgs.runCommand "lib-slop-env-scratch-exchange" { } ''
+                  for launcher in ${bins.claude}/bin/claude ${bins.jail-shell}/bin/jail-shell; do
+                    if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e CLAUDE_EXCHANGE_DIR' "$launcher"; then
+                      echo "FAIL: $launcher does not forward TMPDIR + CLAUDE_EXCHANGE_DIR through sandboxed" >&2
+                      exit 1
+                    fi
+                  done
+                  echo "Scratch + Exchange exported and forwarded on Linux launchers + shellHook" > $out
+                ''
+              else
+                throw "linux scratch/exchange regression: exportsTmpdir=${pkgs.lib.boolToString exportsTmpdir} exportsExchange=${pkgs.lib.boolToString exportsExchange} forwardsBoth=${pkgs.lib.boolToString forwardsBoth}";
 
             # Slice 20 (#01): NixOS module evaluation — asserts user@
             # sessions carry no cgroup Delegate after the dead BPF

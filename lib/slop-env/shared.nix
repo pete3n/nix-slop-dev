@@ -7,7 +7,7 @@
 let
   lib = pkgs.lib;
 in
-rec {
+{
   # Default base package set. Every Slop Env ships at least these so the
   # jailed shell is usable (sh + the unix toolbox + git/gh + ripgrep, etc).
   # Projects can extend via mkShell's basePkgs / projectPkgs args.
@@ -27,6 +27,7 @@ rec {
     jq
     nix
     ps
+    python314
     ripgrep
     unzip
     which
@@ -66,20 +67,21 @@ rec {
   # Arg shape mirrors the template's inline let-binding so the byte-eq
   # check holds after the lift.
   mkJailCombinators =
-    { jail
-    , projectName
-    , skillsDir ? null
-    , claudeMd
-    , claudeSettings
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , # Source path for the env interpreter the jail mounts at
+    {
+      jail,
+      projectName,
+      skillsDir ? null,
+      claudeMd,
+      claudeSettings,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      # Source path for the env interpreter the jail mounts at
       # /usr/bin/env. Linux bwrap binds coreutils' env into the mount
       # namespace; Darwin's /usr/bin is SIP-protected so the binding's
       # source is the literal /usr/bin/env on the host (slice 21).
-      envSrc ? "${pkgs.coreutils}/bin/env"
-    , # cfgDir lifecycle combinator. Linux uses jail-nix's tmpfs (a
+      envSrc ? "${pkgs.coreutils}/bin/env",
+      # cfgDir lifecycle combinator. Linux uses jail-nix's tmpfs (a
       # real namespace-local mount — the host's cfgDir is shadowed,
       # not modified, so cleanup-on-exit is a host no-op). Darwin's
       # local tmpfs `rm -rf`s the actual host dir at trap-exit, which
@@ -87,25 +89,25 @@ rec {
       # history) between runs. Darwin overrides with `ensure-dir`
       # (mkdir-only, no cleanup); Linux keeps the tmpfs default.
       # HITL 2026-06-19.
-      cfgDirCombinator ? null
-    , # When false, omit the shared-credentials symlink graft below.
+      cfgDirCombinator ? null,
+      # When false, omit the shared-credentials symlink graft below.
       # Sound only where cfgDir persists on its own (Darwin's ensure-dir):
       # claude writes .credentials.json atomically (write .tmp + rename),
       # which detaches a single-file symlink, and the next launch's
       # `ln -sfn -f` preflight would delete the real token. Linux keeps it
       # (true) — its tmpfs cfgDir has no other persistence path.
       # HITL 2026-06-19.
-      shareCredentialsFile ? true
-    ,
+      shareCredentialsFile ? true,
     }:
     let
       sharedDir = "~/.local/state/claude/shared";
       cfgDir = "~/.local/state/claude/projects/${projectName}";
       c = jail.combinators;
       cfgDirInit =
-        if cfgDirCombinator != null
-        then cfgDirCombinator (c.noescape cfgDir)
-        else c.tmpfs (c.noescape cfgDir);
+        if cfgDirCombinator != null then
+          cfgDirCombinator (c.noescape cfgDir)
+        else
+          c.tmpfs (c.noescape cfgDir);
     in
     with c;
     [
@@ -139,8 +141,9 @@ rec {
     # never fills, and the next launch's `ln -sfn -f` preflight deletes
     # the real token. Darwin sets shareCredentialsFile=false and lets the
     # token live in the persistent cfgDir directly. HITL 2026-06-19.
-    ++ lib.optional shareCredentialsFile
-      (rw-bind (noescape "${sharedDir}/.credentials.json") (noescape "${cfgDir}/.credentials.json"))
+    ++ lib.optional shareCredentialsFile (
+      rw-bind (noescape "${sharedDir}/.credentials.json") (noescape "${cfgDir}/.credentials.json")
+    )
 
     ++ [
       # Per-project persistent state.
@@ -158,6 +161,19 @@ rec {
       (try-readwrite (noescape "${cfgDir}/statsig"))
       (try-readwrite (noescape "${cfgDir}/todos"))
 
+      # Host-visible per-project Scratch (TMPDIR) and Exchange dirs — see
+      # CONTEXT.md for both terms. Scratch is the agent's default temp;
+      # Exchange is the deliberate user<->agent file-handoff channel (the
+      # handoff skill writes here). Both must be reachable from the host: on
+      # Linux cfgDir is an in-namespace tmpfs, so these children are rw-bound
+      # back to the real host dir (host-visible + persistent); on Darwin
+      # cfgDir is a persistent ensure-dir, so the bind is a
+      # redundant-but-harmless allow (same as the cfgDir children above). The
+      # launchers export TMPDIR / CLAUDE_EXCHANGE_DIR pointing at these paths
+      # and forward them in (try-fwd-env below) because `env -i` drops them.
+      (try-readwrite (noescape "${cfgDir}/tmp"))
+      (try-readwrite (noescape "${cfgDir}/exchange"))
+
       # Shared caches — safe to share, contents are content-addressed
       # or per-package, not per-session state.
       (try-readwrite (noescape "~/.cache"))
@@ -165,6 +181,11 @@ rec {
       (try-readwrite (noescape "~/.local/share/claude-code"))
 
       (try-fwd-env "CLAUDE_CONFIG_DIR")
+      # Scratch + Exchange (above). `env -i` in the jail launcher drops
+      # these, so Node's os.tmpdir() / the handoff skill would otherwise fall
+      # back to the jail-denied /tmp; forward the launcher-set values in.
+      (try-fwd-env "TMPDIR")
+      (try-fwd-env "CLAUDE_EXCHANGE_DIR")
       (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
       # Distinctive prompt inside the jail so the user can tell at a
       # glance which shell they're in. The outer dev shell prints

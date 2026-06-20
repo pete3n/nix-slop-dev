@@ -76,14 +76,10 @@ let
         # the closed-by-default deny on the set-environment path.
         (set-env "__NIX_DARWIN_SET_ENVIRONMENT_DONE" "1")
 
-        # The jail launches via `/usr/bin/env -i`, which drops TMPDIR, so
-        # claude-code's Node os.tmpdir() falls back to /tmp — blocked by
-        # `(deny default)`, surfacing as EPERM when the agent's tooling
-        # creates its temp dir (e.g. the Bash tool's worker). The launchers
-        # export TMPDIR into the writable cfgDir; forward it through so
-        # os.tmpdir() lands inside the sandbox's existing writable set (no
-        # new path opened). HITL 2026-06-19.
-        (try-fwd-env "TMPDIR")
+        # TMPDIR (Scratch) and CLAUDE_EXCHANGE_DIR (Exchange) are now
+        # forwarded by the shared combinator list (shared.nix) on both
+        # platforms — `env -i` drops them, and the launchers below export
+        # both pointing into the persistent cfgDir.
 
         # claude-code (Bun) spawns /usr/bin/security to read OAuth
         # credentials from the macOS keychain (and to store new ones
@@ -175,10 +171,12 @@ let
         ${configDirSetup}
         # Keep agent scratch inside the writable cfgDir — the jail denies
         # /tmp and `env -i` drops TMPDIR, so Node's os.tmpdir() would EPERM
-        # there (forwarded via try-fwd-env in darwinJailExtras).
-        # HITL 2026-06-19.
+        # there (both forwarded via try-fwd-env in shared.nix). Exchange is
+        # the deliberate user<->agent handoff channel (see CONTEXT.md);
+        # sandbox-exec passes the exported env through, so no -e is needed.
         export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR"
+        export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedClaude}/bin/sandboxed-jailed-claude -q \
           --allow api.anthropic.com \
@@ -192,10 +190,12 @@ let
         ${configDirSetup}
         # Keep agent scratch inside the writable cfgDir — the jail denies
         # /tmp and `env -i` drops TMPDIR, so Node's os.tmpdir() would EPERM
-        # there (forwarded via try-fwd-env in darwinJailExtras).
-        # HITL 2026-06-19.
+        # there (both forwarded via try-fwd-env in shared.nix). Exchange is
+        # the deliberate user<->agent handoff channel (see CONTEXT.md);
+        # sandbox-exec passes the exported env through, so no -e is needed.
         export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
-        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR"
+        export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
         exec ${sandboxedShell}/bin/sandboxed-jailed-shell "$@"
       '';
@@ -207,7 +207,12 @@ let
       shellHook = ''
         # Project unique config
         export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}"
-        mkdir -p "$CLAUDE_CONFIG_DIR"
+        # Host-visible Scratch + Exchange (see CONTEXT.md). Exported in the
+        # outer dev shell too so the user can `cd "$CLAUDE_EXCHANGE_DIR"`
+        # and drop files in for the agent to ingest.
+        export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+        export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+        mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
         [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 
         # Setup checks
@@ -226,7 +231,8 @@ let
 
         if [ "$_setup_ok" -eq 1 ]; then
         	printf '\033[1;32m✓\033[0m Jailed claude ready. Run \033[1mclaude\033[0m to start.\n'
-        fi${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
+        fi
+        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$CLAUDE_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
       '';
     in
     {
