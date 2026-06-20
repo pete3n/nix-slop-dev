@@ -51,18 +51,22 @@ check_auditd() {
 # Direct file detection is the fast path, but /etc/sudoers.d/ is typically
 # 0750 root:root and a non-root user not in the root group can't even
 # traverse into it (most visible on Fedora). When `[ -f … ]` fails for that
-# reason we fall back to a functional probe: `sudo -n auditctl -h` succeeds
-# without prompting if our NOPASSWD grant is active, which is the only way
-# the drop-in could be functional anyway — so a successful probe is proof
-# of presence even when we can't see the file directly.
+# reason we fall back to a functional probe: `sudo -n systemctl --version`
+# succeeds without prompting iff our NOPASSWD grant is active (systemctl is one
+# of the five granted tools), which is the only way the drop-in could be
+# functional anyway — so a successful probe is proof of presence even when we
+# can't see the file directly. We probe `systemctl --version` rather than
+# `auditctl -h`: --version is exit-0 on every distro, whereas auditctl's
+# help flag exits non-zero on Debian/Ubuntu's audit build — a false negative
+# that reported the active drop-in as missing.
 check_sudoers() {
 	sudoers_file="$1"
 	if [ -f "$sudoers_file" ] 2>/dev/null; then
 		printf '✓ sudoers drop-in present (%s)\n' "$sudoers_file"
 		return 0
 	fi
-	if sudo -n auditctl -h >/dev/null 2>&1; then
-		printf '✓ sudoers drop-in active (NOPASSWD probe via auditctl succeeded; %s not directly readable)\n' "$sudoers_file"
+	if sudo -n systemctl --version >/dev/null 2>&1; then
+		printf '✓ sudoers drop-in active (NOPASSWD probe via systemctl succeeded; %s not directly readable)\n' "$sudoers_file"
 		return 0
 	fi
 	printf '✗ sudoers drop-in missing or inactive (%s) — run: nix run github:pete3n/nix-slop-dev#setup-linux -- --apply\n' "$sudoers_file"
