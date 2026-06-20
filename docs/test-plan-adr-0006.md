@@ -29,18 +29,19 @@ that can reach it.
 
 | # | Invariant | Oracle check | NixOS | Distro VM | macOS |
 |---|---|---|---|---|---|
-| 1 | deny-closed (no data transfers) | `net-deny` | ✅ | 🟡 | 🟡 |
-| 2 | allow-connects | `net-allow` | ✅ | 🟡 | 🟡 |
-| 3 | violation recorded | `violation-logged` | ✅ (auditd) | 🟡 (auditd) | 🟡 (proxy/unified log) |
-| 4 | confined-out path invisible | `path-hidden` | ✅ | 🟡 | 🟡 |
-| 5 | project dir read-write | `path-rw` | ✅ | 🟡 | 🟡 |
-| 6 | host binary absent from jail PATH | `no-host-bin` | ✅ | 🟡 | 🟡 |
+| 1 | deny-closed (no data transfers) | `net-deny` | ✅ | 🟡 | ✅ |
+| 2 | allow-connects | `net-allow` | ✅ | 🟡 | ✅ |
+| 3 | violation recorded | `violation-logged` | ✅ (auditd) | 🟡 (auditd) | ✅ (proxy/unified log) |
+| 4 | confined-out path invisible | `path-hidden` | ✅ | 🟡 | ✅ |
+| 5 | project dir read-write | `path-rw` | ✅ | 🟡 | ✅ |
+| 6 | host binary cannot be executed | `no-host-bin` | ✅ | 🟡 | ✅ |
 
 - **NixOS** ✅: invariants 1/2/3 in `tests/sandbox-functional.nix`; 4/5/6 in
   `tests/jail-functional.nix`. Both are `functionalTests.x86_64-linux.*`.
 - **Distro VM** 🟡: all six in `ci/distro-guest-test.sh` (driven by
   `ci/distro-e2e.sh`). Implemented, never executed — gated on `DISTRO_E2E_READY`.
-- **macOS** 🟡: all six in `ci/macos-functional.sh`. Gated on `MACOS_FUNCTIONAL_READY`.
+- **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**.
+  Ready to flip `MACOS_FUNCTIONAL_READY` to un-gate the CI job.
 
 ## 2. Platform extras (layer on top of the six)
 
@@ -48,13 +49,13 @@ These are the per-platform additions ADR-0006 calls out explicitly.
 
 | Behaviour | Platform | Covered by | Status |
 |---|---|---|---|
-| Raw (non-proxy) TCP fails closed | macOS (bonus on Linux) | `net-deny-raw` in `macos-functional.sh` | 🟡 |
+| Raw (non-proxy) TCP fails closed | macOS (bonus on Linux) | `net-deny-raw` in `macos-functional.sh` | ✅ verified on aarch64-darwin |
 | **UDP** fails closed | macOS | `net-deny-udp` (echo stub) in `macos-functional.sh` | ✅ verified on aarch64-darwin (Seatbelt denies the UDP connect) |
 | `--wl-add` **persists** to next launch | Linux | `sandbox-functional.nix` (`--wl-add` → re-probe) | ✅ |
 | `--wl-add` **live-updates a running** unit | Linux | `sandbox-wl-live-update.nix` (deny-at-launch → live `set-property` → reach, same unit) | ✅ |
-| `--wl-add` **persists** to next launch | macOS | `macos-functional.sh` (wl-add-persists) | 🟡 |
+| `--wl-add` **persists** to next launch | macOS | `macos-functional.sh` (wl-add-persists) | ✅ verified on aarch64-darwin |
 | `--wl-add` has **no live effect** on a running session | macOS | — | 🔴 **gap** — see slice 4.4 |
-| TMPDIR redirected into cfgDir; `/tmp` denied | macOS | `macos-functional.sh` (tmpdir-redirect) | 🟡 |
+| TMPDIR redirected into cfgDir; `/tmp` denied | macOS | `macos-functional.sh` (tmpdir-redirect) | ✅ verified on aarch64-darwin |
 | Live OAuth **creds-persist** across relaunch | macOS | — (wiring only, see §3) | 🟠 eval-only — see slice 4.5 |
 | Fedora SELinux `/nix` exec precondition holds | Fedora | `distro-guest-test.sh` (jail launches ⇒ relabel worked) | 🟡 |
 | Ubuntu AppArmor userns precondition holds | Ubuntu | `distro-guest-test.sh` (jail launches ⇒ profile loaded) | 🟡 |
@@ -156,23 +157,20 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
 
 Honest status, because "implemented" ≠ "observed enforcing":
 
-- **`wl-live-update`** — ✅ executed green on a KVM builder (slice 4.1).
-- **NixOS `sandbox`/`jail`/`template`** — wired into `functionalTests`. The
-  `testing.md` "green today" claim is **not borne out** for the two-node
-  `sandbox` test: it carried the same NAT-IP discovery bug 4.1 hit (picking the
-  per-VM `10.0.2.15` user-mode NAT instead of the shared `192.168.x` VLAN), so
-  its sanity anchor fails on a builder whose test VMs have a user-mode NAT. **Now
-  fixed** in `sandbox-functional.nix` (same one-line `grep 192.168` selection);
-  **needs a confirming run.** `jail`/`template` are single-node (no peer IP) so
-  are unaffected, but have likewise not been re-executed here.
-- **Distro + macOS harnesses** — fully written but **never executed on real
-  infra**; both gated. Their oracle assertions *are* the failing tests; making
-  them pass on real hardware is slices 4.2/4.3.
-- **No ADR-named behaviour is unbacked any more.** macOS UDP (4.6) is verified on
-  aarch64-darwin; the roadmap-skeleton guard (4.7) is closed by
-  `roadmap-skeletons-guarded`. What remains is *validation on real infra*
-  (distro harness 4.2, the rest of the macOS run 4.4/4.5) — plus the open finding
-  below.
+- **`wl-live-update`** + **`sandbox`** — ✅ executed green on a KVM builder
+  (slice 4.1, and `sandbox` after the NAT-IP fix). The earlier `testing.md`
+  "green today" claim had *not* held for the two-node `sandbox` test — it carried
+  the NAT-IP bug 4.1 exposed (picking the per-VM `10.0.2.15` user-mode NAT over
+  the shared `192.168.x` VLAN) — now fixed (`grep 192.168`) and confirmed.
+  `jail`/`template` are single-node (no peer IP), unaffected, not re-executed here.
+- **macOS harness** — ✅ **green on aarch64-darwin** (every check, including
+  `net-deny-udp` and the reworked `no-host-bin`). Two bugs were found and fixed
+  during validation (the UDP `exec`/`read -t` issues; the `</dev/null` exec
+  probe). Ready to flip `MACOS_FUNCTIONAL_READY`.
+- **Distro harness** — fully written but **not yet executed on real infra**;
+  gated on `DISTRO_E2E_READY` (slice 4.2).
+- **No ADR-named behaviour is unbacked, and the macOS layer is verified.** What
+  remains is the distro harness (4.2) and the optional macOS slices 4.4/4.5.
 
 ## 7. Resolved finding — `no-host-bin` now tests executability, not PATH presence
 
@@ -201,11 +199,12 @@ unchanged (sudo is absent → the same PASS); macOS now PASSes correctly. Valida
 on Linux across all three branches (absent → PASS; runnable `env` → FAIL-leaked;
 present-but-non-exec, rc 126 → PASS, mimicking the macOS denial).
 
-**Status:** with this fix the macOS run should be all-green; a confirming
-`ci/macos-functional.sh` run is the last step before flipping
-`MACOS_FUNCTIONAL_READY`. Everything else in the first run already passed
-(`net-deny`, `violation-logged`, `net-allow`, `path-rw`, `path-hidden`,
-`net-deny-raw`, `net-deny-udp`, `tmpdir-redirect`, `wl-add-persists`).
+**Status:** RESOLVED. `ci/macos-functional.sh` is **green on aarch64-darwin** —
+every check passes, including the reworked `no-host-bin sudo` (exec-denied) and
+`net-deny-udp`. `MACOS_FUNCTIONAL_READY=true` can be flipped to un-gate the CI
+job. (One follow-on bug surfaced and was fixed during the confirming run: the
+exec probe's `</dev/null` is denied by the jail — write-only on `/dev/null` —
+so it was removed.)
 
 ## 6. Adding an invariant
 

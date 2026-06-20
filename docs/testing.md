@@ -104,7 +104,7 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
 | NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
 | Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | implemented, **awaits one-time KVM validation**, gated |
-| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | run once on aarch64-darwin: all pass; the lone `no-host-bin sudo` failure was a wrong test (sudo is exec-denied, not a leak) and is **fixed** — needs one confirming run, then flip `MACOS_FUNCTIONAL_READY`. |
+| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | **green on aarch64-darwin** (all checks pass). Ready to flip `MACOS_FUNCTIONAL_READY=true`. |
 
 ## First-run validation playbook (for the next agent)
 
@@ -135,7 +135,9 @@ Framed as red→green for the [tdd](../) skill. Each is independent.
 1. **Validate + green the distro harness**, then `DISTRO_E2E_READY=true`. The
    oracle assertions are the failing test; making them pass on a real
    Fedora/Debian/Ubuntu VM is the work. Resolve the playbook risk points first.
-2. **Validate + green the macOS harness**, then `MACOS_FUNCTIONAL_READY=true`.
+2. ~~**Validate + green the macOS harness**~~ — DONE. Green on aarch64-darwin
+   (all checks pass, including `net-deny-udp` and the reworked `no-host-bin`).
+   Flip `MACOS_FUNCTIONAL_READY=true` to un-gate the CI job.
 3. **Deferred macOS extras** (currently documented as out-of-scope in
    `ci/macos-functional.sh`):
    - `--wl-add` has **no effect on a *running* session** (only next launch).
