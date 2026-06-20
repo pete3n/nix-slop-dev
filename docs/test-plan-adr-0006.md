@@ -40,9 +40,10 @@ that can reach it.
   `tests/jail-functional.nix`. Both are `functionalTests.x86_64-linux.*`.
 - **Distro VM** ✅: all six in `ci/distro-guest-test.sh` (driven by
   `ci/distro-e2e.sh`), **green on Debian, Ubuntu, and Fedora** (Fedora under
-  SELinux Enforcing). Ready to flip `DISTRO_E2E_READY`.
-- **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**.
-  Ready to flip `MACOS_FUNCTIONAL_READY` to un-gate the CI job.
+  SELinux Enforcing), validated on real hardware (VMs/bare metal). Activate with
+  `DISTRO_E2E_READY=true`.
+- **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**,
+  validated on real hardware. Activate with `MACOS_FUNCTIONAL_READY=true`.
 
 ## 2. Platform extras (layer on top of the six)
 
@@ -202,7 +203,13 @@ Honest status, because "implemented" ≠ "observed enforcing":
   "green today" claim had *not* held for the two-node `sandbox` test — it carried
   the NAT-IP bug 4.1 exposed (picking the per-VM `10.0.2.15` user-mode NAT over
   the shared `192.168.x` VLAN) — now fixed (`grep 192.168`) and confirmed.
-  `jail`/`template` are single-node (no peer IP), unaffected, not re-executed here.
+  `jail`/`template` are single-node (no peer IP), unaffected by the NAT-IP fix —
+  but both carried a separate build-time bug: a Python triple-quote (`'''…'''`) in
+  their testScripts that Nix's `''` indented-string escaping collapsed to an empty
+  `f''`, so the NixOS test-driver type-check failed before the VM could boot. Fixed
+  to double-quoted, `\"`-escaped strings (`tests/{jail,template}-functional.nix`);
+  both now clear the driver type-check **and** lint locally, leaving only the
+  KVM-gated VM run to confirm green.
 - **macOS harness** — ✅ **green on aarch64-darwin** (every check, including
   `net-deny-udp` and the reworked `no-host-bin`). Two bugs were found and fixed
   during validation (the UDP `exec`/`read -t` issues; the `</dev/null` exec

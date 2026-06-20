@@ -102,16 +102,17 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | Eval gate (`pr-checks.yml`) | real |
 | NixOS functional: `wl-live-update` | real, hermetic, **verified green on a KVM builder** |
 | NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
-| NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
-| Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | **green on Debian, Ubuntu, Fedora** (all six invariants enforced after `--apply`; Fedora under SELinux Enforcing). Ready to flip `DISTRO_E2E_READY=true`. |
-| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | **green on aarch64-darwin** (all checks pass). Ready to flip `MACOS_FUNCTIONAL_READY=true`. |
+| NixOS functional: `jail`, `template` | real, hermetic. Both testScripts had a Python triple-quote (`'''…'''`) that Nix's `''` indented-string escaping collapsed to an empty `f''`, failing the test-driver type-check; fixed to double-quoted `\"`-escaped strings. Now passes type-check **and** lint; the VM run still needs KVM. |
+| Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | **green on Debian, Ubuntu, Fedora** (all six invariants enforced after `--apply`; Fedora under SELinux Enforcing). Validated on real hardware (VMs/bare metal); activate with `DISTRO_E2E_READY=true`. |
+| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | **green on aarch64-darwin** (all checks pass). Validated on real hardware; activate with `MACOS_FUNCTIONAL_READY=true`. |
 
-## First-run validation playbook (for the next agent)
+## First-run validation playbook (retained for reference)
 
-The distro and macOS harnesses are written but **never executed** — they need
-real infra this author couldn't reach. Validate each once via `workflow_dispatch`
-(or locally), shake out the flagged risk points, then flip its gate variable.
-Each script's header lists its risk points; summary:
+The distro and macOS harnesses **have now been validated** on real hardware (the
+distro suite on KVM VMs, the macOS suite on bare-metal aarch64-darwin); their gate
+variables are ready to activate. The risk points below are kept as a reference for
+re-validating on new infra or after a cloud-image/runner change. Each script's
+header also lists its risk points; summary:
 
 **Distro (`bash ci/distro-e2e.sh fedora` on a KVM box):**
 - slirp `10.0.2.2` → host stub reachability (the deny/allow targets).
