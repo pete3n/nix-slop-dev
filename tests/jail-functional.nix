@@ -70,10 +70,11 @@ pkgs.testers.runNixOSTest {
 
     # Run all three Jail-boundary invariants INSIDE the jail. cd into the
     # project dir first so mount-cwd binds it; the checks are chained so any
-    # single FAIL exits non-zero and surfaces here. Triple-quoted so the
-    # nested su / jailed-shell quoting stays readable.
+    # single FAIL exits non-zero and surfaces here. Double-quoted with the
+    # inner double-quotes escaped (\"); a Python triple-quoted literal cannot
+    # be used here, as Nix collapses its quote run inside this indented string.
     agent.succeed(
-        '''su - agent -c 'cd ~/project && jailed-shell -c "slop-oracle path-rw /home/agent/project && slop-oracle path-hidden /home/agent/.ssh/id_secret && slop-oracle no-host-bin sudo"' '''
+        "su - agent -c 'cd ~/project && jailed-shell -c \"slop-oracle path-rw /home/agent/project && slop-oracle path-hidden /home/agent/.ssh/id_secret && slop-oracle no-host-bin sudo\"' "
     )
 
     # Negative control: prove the secret really exists on the host, so the

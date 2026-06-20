@@ -84,14 +84,16 @@ primitives are arch-independent, so aarch64 stays eval-level (ADR-0006).
   the heavy matrix on push-to-main / nightly / dispatch / `v*` tags. Require it
   on tags so a release can't ship red.
 
-Per-harness gate variables (Settings → Secrets and variables → Actions →
-Variables) — the distro/macOS jobs stay skipped (neither false-pass nor
-false-fail) until set:
+The distro/macOS jobs are validated and **run by default**. Each has a kill
+switch — a per-harness repo variable (Settings → Secrets and variables →
+Actions → Variables): set it to `false` to disable that harness without a code
+change (e.g. if it goes flaky on the GitHub-hosted runner). Unset or any other
+value runs it:
 
-| Variable | Enables |
+| Variable | Effect |
 |---|---|
-| `DISTRO_E2E_READY=true` | the Debian/Ubuntu/Fedora jobs |
-| `MACOS_FUNCTIONAL_READY=true` | the macOS job |
+| `DISTRO_E2E_READY=false` | disables the Debian/Ubuntu/Fedora jobs |
+| `MACOS_FUNCTIONAL_READY=false` | disables the macOS job |
 
 The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 
@@ -102,16 +104,17 @@ The `nixos` jobs (sandbox/jail/template) are ungated — real and green today.
 | Eval gate (`pr-checks.yml`) | real |
 | NixOS functional: `wl-live-update` | real, hermetic, **verified green on a KVM builder** |
 | NixOS functional: `sandbox` | real, hermetic, **verified green on a KVM builder** (after the NAT-IP fix) |
-| NixOS functional: `jail`, `template` | real, hermetic; not re-executed here (single-node, unaffected by the NAT-IP fix) |
-| Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | **green on Debian, Ubuntu, Fedora** (all six invariants enforced after `--apply`; Fedora under SELinux Enforcing). Ready to flip `DISTRO_E2E_READY=true`. |
-| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | **green on aarch64-darwin** (all checks pass). Ready to flip `MACOS_FUNCTIONAL_READY=true`. |
+| NixOS functional: `jail`, `template` | real, hermetic. Both testScripts had a Python triple-quote (`'''…'''`) that Nix's `''` indented-string escaping collapsed to an empty `f''`, failing the test-driver type-check; fixed to double-quoted `\"`-escaped strings. Now passes type-check **and** lint; the VM run still needs KVM. |
+| Distro e2e (`ci/distro-e2e.sh` + `ci/distro-guest-test.sh`) | **green on Debian, Ubuntu, Fedora** (all six invariants enforced after `--apply`; Fedora under SELinux Enforcing). Validated on real hardware (VMs/bare metal); runs by default (kill switch `DISTRO_E2E_READY=false`). |
+| macOS functional (`ci/macos-functional.sh` + `functionalTests.<darwin>.probe-jail-shell`) | **green on aarch64-darwin** (all checks pass). Validated on real hardware; runs by default (kill switch `MACOS_FUNCTIONAL_READY=false`). |
 
-## First-run validation playbook (for the next agent)
+## First-run validation playbook (retained for reference)
 
-The distro and macOS harnesses are written but **never executed** — they need
-real infra this author couldn't reach. Validate each once via `workflow_dispatch`
-(or locally), shake out the flagged risk points, then flip its gate variable.
-Each script's header lists its risk points; summary:
+The distro and macOS harnesses **have now been validated** on real hardware (the
+distro suite on KVM VMs, the macOS suite on bare-metal aarch64-darwin); their gate
+variables are ready to activate. The risk points below are kept as a reference for
+re-validating on new infra or after a cloud-image/runner change. Each script's
+header also lists its risk points; summary:
 
 **Distro (`bash ci/distro-e2e.sh fedora` on a KVM box):**
 - slirp `10.0.2.2` → host stub reachability (the deny/allow targets).
@@ -137,11 +140,11 @@ Framed as red→green for the [tdd](../) skill. Each is independent.
    and Fedora (Fedora under SELinux Enforcing). Six real issues were fixed along
    the way (apt-on-Nix host deps, Fedora image-URL drift, `apt-get update`
    before auditd, SELinux 203/EXEC from a $HOME oracle path, and the
-   `auditctl -h` sudoers-probe false negative). Flip `DISTRO_E2E_READY=true` to
-   un-gate the CI jobs.
+   `auditctl -h` sudoers-probe false negative). The CI jobs run by default
+   (kill switch `DISTRO_E2E_READY=false`).
 2. ~~**Validate + green the macOS harness**~~ — DONE. Green on aarch64-darwin
    (all checks pass, including `net-deny-udp` and the reworked `no-host-bin`).
-   Flip `MACOS_FUNCTIONAL_READY=true` to un-gate the CI job.
+   The CI job runs by default (kill switch `MACOS_FUNCTIONAL_READY=false`).
 3. **Deferred macOS extras** (currently documented as out-of-scope in
    `ci/macos-functional.sh`):
    - `--wl-add` has **no effect on a *running* session** (only next launch).

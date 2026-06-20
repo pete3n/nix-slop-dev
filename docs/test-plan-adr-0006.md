@@ -40,9 +40,10 @@ that can reach it.
   `tests/jail-functional.nix`. Both are `functionalTests.x86_64-linux.*`.
 - **Distro VM** ✅: all six in `ci/distro-guest-test.sh` (driven by
   `ci/distro-e2e.sh`), **green on Debian, Ubuntu, and Fedora** (Fedora under
-  SELinux Enforcing). Ready to flip `DISTRO_E2E_READY`.
-- **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**.
-  Ready to flip `MACOS_FUNCTIONAL_READY` to un-gate the CI job.
+  SELinux Enforcing), validated on real hardware (VMs/bare metal). Runs by
+  default; kill switch `DISTRO_E2E_READY=false`.
+- **macOS** ✅: all six in `ci/macos-functional.sh`, **green on aarch64-darwin**,
+  validated on real hardware. Runs by default; kill switch `MACOS_FUNCTIONAL_READY=false`.
 
 ## 2. Platform extras (layer on top of the six)
 
@@ -134,7 +135,8 @@ with Fedora — that is where the SELinux `/nix`-label HITL bugs lived):
      `--apply` (Fedora SELinux, the HITL area).
    - `jail` FAIL → `setup-linux --apply` did not make the bubblewrap precondition
      hold (Fedora SELinux `/nix` exec label, Ubuntu AppArmor userns).
-4. **On green for all three**, set `DISTRO_E2E_READY=true` to un-gate the CI jobs.
+4. **On green for all three** (done), the CI jobs run by default; the kill
+   switch `DISTRO_E2E_READY=false` disables them without a code change.
 
 Expect first-run friction (this harness has never executed) — the macOS run took
 three fix iterations; budget the same here.
@@ -142,8 +144,8 @@ three fix iterations; budget the same here.
 ### 4.3 Validate + green the macOS harness  🟡 needs a mac
 - **Behaviour**: the six + macOS extras hold under real Seatbelt.
 - **Work**: run `ci/macos-functional.sh`, resolve risk points (proxy-honouring for
-  a loopback stub; loopback-port assumption in `net-deny-raw`), then
-  `MACOS_FUNCTIONAL_READY=true`.
+  a loopback stub; loopback-port assumption in `net-deny-raw`). Done; the job now
+  runs by default (kill switch `MACOS_FUNCTIONAL_READY=false`).
 
 ### 4.4 macOS `--wl-add` has no live effect on a running session  🟡 needs a mac
 - **Behaviour**: `--wl-add` from outside a *running* jailed session does **not**
@@ -202,18 +204,24 @@ Honest status, because "implemented" ≠ "observed enforcing":
   "green today" claim had *not* held for the two-node `sandbox` test — it carried
   the NAT-IP bug 4.1 exposed (picking the per-VM `10.0.2.15` user-mode NAT over
   the shared `192.168.x` VLAN) — now fixed (`grep 192.168`) and confirmed.
-  `jail`/`template` are single-node (no peer IP), unaffected, not re-executed here.
+  `jail`/`template` are single-node (no peer IP), unaffected by the NAT-IP fix —
+  but both carried a separate build-time bug: a Python triple-quote (`'''…'''`) in
+  their testScripts that Nix's `''` indented-string escaping collapsed to an empty
+  `f''`, so the NixOS test-driver type-check failed before the VM could boot. Fixed
+  to double-quoted, `\"`-escaped strings (`tests/{jail,template}-functional.nix`);
+  both now clear the driver type-check **and** lint locally, leaving only the
+  KVM-gated VM run to confirm green.
 - **macOS harness** — ✅ **green on aarch64-darwin** (every check, including
   `net-deny-udp` and the reworked `no-host-bin`). Two bugs were found and fixed
   during validation (the UDP `exec`/`read -t` issues; the `</dev/null` exec
-  probe). Ready to flip `MACOS_FUNCTIONAL_READY`.
+  probe). Runs by default (kill switch `MACOS_FUNCTIONAL_READY=false`).
 - **Distro harness** — ✅ **green on Debian, Ubuntu, and Fedora** (Fedora under
   SELinux Enforcing; the `--apply`-generated sudoers/auditd/SELinux config loads
   and enforcement holds — the HITL-2026-06-19 bug class). Six issues were fixed
   during validation: apt-on-Nix host deps, Fedora image-URL drift, `apt-get
   update` before auditd (a real `setup-linux` bug), the SELinux 203/EXEC from a
-  `$HOME` oracle path, and the `auditctl -h` sudoers-probe false negative. Ready
-  to flip `DISTRO_E2E_READY`.
+  `$HOME` oracle path, and the `auditctl -h` sudoers-probe false negative. Runs
+  by default (kill switch `DISTRO_E2E_READY=false`).
 - **Both functional harnesses are now verified on real hardware.** What remains
   is only the optional macOS slices 4.4 (`--wl-add` no-live-effect) and 4.5
   (creds-persist) — no unbacked ADR behaviour, no unexecuted harness.
@@ -247,8 +255,8 @@ present-but-non-exec, rc 126 → PASS, mimicking the macOS denial).
 
 **Status:** RESOLVED. `ci/macos-functional.sh` is **green on aarch64-darwin** —
 every check passes, including the reworked `no-host-bin sudo` (exec-denied) and
-`net-deny-udp`. `MACOS_FUNCTIONAL_READY=true` can be flipped to un-gate the CI
-job. (One follow-on bug surfaced and was fixed during the confirming run: the
+`net-deny-udp`. The CI job runs by default (kill switch
+`MACOS_FUNCTIONAL_READY=false`). (One follow-on bug surfaced and was fixed during the confirming run: the
 exec probe's `</dev/null` is denied by the jail — write-only on `/dev/null` —
 so it was removed.)
 
