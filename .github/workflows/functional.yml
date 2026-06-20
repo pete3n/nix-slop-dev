@@ -1,0 +1,146 @@
+# Functional layer — the heavy matrix (ADR-0006).
+#
+# Boots real systems and exercises actual enforcement, so it does NOT gate
+# PRs. It runs on merge-to-main, nightly, manual dispatch, and on release
+# tags — the tag trigger is what makes "green before a release" enforceable
+# via branch/tag protection requiring this workflow.
+#
+# Coverage:
+#   nixos    — x86_64 NixOS VM oracle: Sandbox + Jail boundaries, plus the
+#              exported templates' jails (template-functional). Real today.
+#   distros  — Debian/Ubuntu/Fedora full end-to-end (setup-linux --apply, then
+#              the oracle) in a KVM cloud-image VM. Calls ci/distro-e2e.sh.
+#              Implemented; gated on DISTRO_E2E_READY.
+#   macos    — Seatbelt enforcement on a real mac, then the oracle. Calls
+#              ci/macos-functional.sh. PENDING; gated on MACOS_FUNCTIONAL_READY.
+#
+# The distros/macos jobs are gated on per-harness repo variables
+# (Settings → Secrets and variables → Actions → Variables) so they can neither
+# false-pass nor false-fail until activated:
+#   DISTRO_E2E_READY=true        — distro harness validated on KVM infra
+#   MACOS_FUNCTIONAL_READY=true  — macOS harness implemented
+name: functional
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  schedule:
+    # Nightly at 06:00 UTC. Bounds the window in which a functional
+    # regression can sit on main between merge runs.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: functional-${{ github.ref }}
+  # Never cancel an in-flight nightly/merge/tag run — each is a full
+  # coverage pass we want to complete.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  nixos:
+    name: NixOS VM (${{ matrix.test }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [sandbox, jail]
+    steps:
+      - uses: actions/checkout@v4
+
+      # nixosTest drives QEMU under KVM. GitHub's ubuntu runners expose
+      # /dev/kvm but not group-accessible by default; this is the canonical
+      # opener.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: build functional test
+        run: nix build -L .#functionalTests.x86_64-linux.${{ matrix.test }}
+
+  templates:
+    name: template functional
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - name: build template functional test
+        run: nix build -L .#functionalTests.x86_64-linux.template
+
+  distros:
+    name: distro e2e (${{ matrix.distro }})
+    # Implemented (ci/distro-e2e.sh). Gated until validated once via manual
+    # dispatch on real KVM infra; set the repo variable DISTRO_E2E_READY=true
+    # to activate on merge/nightly.
+    if: vars.DISTRO_E2E_READY == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Versions tracked in README's "Tested platforms" table.
+        distro: [debian, ubuntu, fedora]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # Boots a real distro VM, installs Nix, runs `setup-linux --apply`, then
+      # the shared oracle. Real VMs (not containers) because invariant #3
+      # (auditd violation recording) does not virtualise per-container.
+      - name: distro end-to-end
+        run: bash ci/distro-e2e.sh ${{ matrix.distro }}
+
+  macos:
+    name: macOS functional
+    # Implemented (ci/macos-functional.sh). Gated until validated once on a
+    # real mac (see the harness header's first-run risk points); set the repo
+    # variable MACOS_FUNCTIONAL_READY=true to activate.
+    if: vars.MACOS_FUNCTIONAL_READY == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # The mac runner IS the Darwin host — no nested VM. Builds the Darwin
+      # Slop Env, stands up a loopback stub, and runs the shared oracle under
+      # the sandboxed-jailed wrapper so Seatbelt actually enforces.
+      - name: macOS functional
+        run: bash ci/macos-functional.sh

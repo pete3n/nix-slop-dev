@@ -457,6 +457,71 @@
           )
       );
 
+      # Functional test layer (ADR-0006). Kept OUT of `checks` so that a
+      # bare `nix flake check` on a PR runner stays eval-only and fast — these
+      # boot a KVM guest and exercise real enforcement. The merge/nightly
+      # workflow builds them explicitly:
+      #   nix build .#functionalTests.x86_64-linux.sandbox
+      # x86_64-linux only: the enforcement primitives (systemd IPAddressDeny,
+      # bubblewrap, auditd) are arch-independent, so aarch64 stays eval-level.
+      functionalTests = {
+        x86_64-linux = {
+          # Sandbox (network) boundary: deny-closed, allow-connects,
+          # violation-recorded, plus whitelist persistence. First member of
+          # the layer; the Jail-boundary nixosTest is the planned second.
+          sandbox = import ./tests/sandbox-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            sandboxedModule = self.nixosModules.sandboxed;
+          };
+
+          # Jail (filesystem) boundary: path-hidden, project-rw,
+          # host-binary-absent. Drives the raw bubblewrap launcher via
+          # `jailed-shell -c` with the oracle on the jail PATH.
+          jail = import ./tests/jail-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+
+          # Exported templates compose an enforcing jail carrying their
+          # configured tooling. Reconstructs each template's jail from its real
+          # config via the lib (faithful per the byte-eq checks), then runs the
+          # oracle inside it. The nvim arm also asserts its lua tooling /
+          # headless plumbing is on the jail PATH.
+          template = import ./tests/template-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+        };
+      }
+      # Darwin: no VM-test framework, so the macOS functional harness
+      # (ci/macos-functional.sh) runs on a real mac. It needs the shared
+      # oracle to run INSIDE the real Seatbelt jail, so we expose the default
+      # `jail-shell` rebuilt with curl + the oracle added to projectPkgs
+      # (curl is not in defaultBasePkgs). The harness builds this and drives
+      # it as `jail-shell [-a host] -- -c '<oracle ...>'`. Mirrors the oracle
+      # injection in tests/jail-functional.nix.
+      // nixpkgs.lib.genAttrs darwinSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          probeOracle = pkgs.writeShellScriptBin "slop-oracle" (
+            builtins.readFile ./tests/oracle/slop-oracle.sh
+          );
+        in
+        {
+          probe-jail-shell =
+            (
+              (self.lib.slopEnv pkgs).mkBins {
+                projectName = "macos-functional";
+                projectPkgs = [
+                  pkgs.curl
+                  probeOracle
+                ];
+              }
+            ).jail-shell;
+        }
+      );
+
       # Slice 18: zero-touch entry points for existing-Nix-flake users.
       # `nix run github:pete3n/nix-slop-dev#claude` works from any project
       # root without touching the project's flake.nix. The lib-bundled

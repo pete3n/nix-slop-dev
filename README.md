@@ -51,6 +51,10 @@ Other systemd-based Linux distributions with cgroup v2 should work —
 Please file an issue if `--check` passes on your distro but the wrapper
 fails at runtime.
 
+How these platforms are tested (the two-layer suite, the shared invariant
+oracle, and how to run each layer) is documented in
+[docs/testing.md](docs/testing.md).
+
 Once setup, you can run a jailed agent directly with:
 
 ``` sh
