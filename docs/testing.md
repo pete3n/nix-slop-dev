@@ -36,7 +36,8 @@ between platforms.
 |---|---|---|
 | `net-allow <url>` | #2 allow-connects | in-env |
 | `net-deny <url>` | #1 deny-closed (no data transfers) | in-env |
-| `net-deny-raw <host> <port>` | non-proxy raw TCP fails closed (macOS UDP/raw quirk; bonus on Linux) | in-env |
+| `net-deny-raw <host> <port>` | non-proxy raw TCP fails closed (macOS; bonus on Linux) | in-env |
+| `net-deny-udp <host> <port>` | non-proxy UDP fails closed, via an echo stub (macOS; bonus on Linux) | in-env |
 | `violation-logged <pattern>` | #3 violation recorded | host (post-run) |
 | `path-hidden <path>` | #4 confined-out path invisible | in-env |
 | `path-rw <dir>` | #5 project dir read-write | in-env |

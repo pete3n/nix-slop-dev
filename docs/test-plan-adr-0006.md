@@ -49,7 +49,7 @@ These are the per-platform additions ADR-0006 calls out explicitly.
 | Behaviour | Platform | Covered by | Status |
 |---|---|---|---|
 | Raw (non-proxy) TCP fails closed | macOS (bonus on Linux) | `net-deny-raw` in `macos-functional.sh` | 🟡 |
-| **UDP** fails closed | macOS | — (oracle has TCP only) | 🔴 **gap** — see slice 4.6 |
+| **UDP** fails closed | macOS | `net-deny-udp` (echo stub) in `macos-functional.sh` | 🟡 (mechanics verified on Linux; Seatbelt verdict pending a mac) |
 | `--wl-add` **persists** to next launch | Linux | `sandbox-functional.nix` (`--wl-add` → re-probe) | ✅ |
 | `--wl-add` **live-updates a running** unit | Linux | `sandbox-wl-live-update.nix` (deny-at-launch → live `set-property` → reach, same unit) | ✅ |
 | `--wl-add` **persists** to next launch | macOS | `macos-functional.sh` (wl-add-persists) | 🟡 |
@@ -117,11 +117,23 @@ Ordering is by leverage and by what is verifiable in this hermetic environment.
   (shellHook detects login via cfgDir; preflight has no clobbering symlink).
   Functional coverage needs an automatable login — design only until then.
 
-### 4.6 macOS UDP fails closed  🟡 needs a mac
-- **Behaviour**: a raw UDP send from inside the jail is denied (ADR says
-  "UDP/raw"; only raw TCP is asserted today).
-- **Interface**: a `net-deny-udp` oracle check parallel to `net-deny-raw`, wired
-  into `macos-functional.sh`. Bonus belt-and-suspenders on Linux.
+### 4.6 macOS UDP fails closed  🟡 wired; Seatbelt verdict pending a mac
+- **Behaviour**: a UDP datagram from inside the jail does not escape — the
+  Seatbelt profile is `(deny network-outbound)` save the proxy's localhost port
+  (ADR-0003), so UDP has no allow path even with `-a` (ADR said "UDP/raw"; only
+  raw TCP was asserted before).
+- **Covered by**: `net-deny-udp` oracle check (parallel to `net-deny-raw`) +
+  harness wiring in `ci/macos-functional.sh` (loopback UDP echo stub, an
+  unconfined positive control, then the confined `-a` check expecting denial).
+- **Status**: the probe **mechanics are verified on Linux** — a reachable echo
+  reads as "leaked" (fail), a dead/denied endpoint as "failed closed" (pass).
+  The macOS Seatbelt verdict can only be observed on a real mac (gated behind
+  `MACOS_FUNCTIONAL_READY`). First-run risk points are in the harness header
+  (loopback openness, `timeout`/`dd` on the jail PATH).
+- **Probe design notes** (bugs found + fixed while building it): socket I/O runs
+  in a subshell because a refused `exec 3<>/dev/udp/...` is a *fatal* redirection
+  error; and the reply is read with `dd bs=… count=1` (one datagram per read())
+  rather than `read -t`, which drops a newline-less datagram on timeout.
 
 ### 4.7 Roadmap-skeleton eval guard  ✅ DONE (green, teeth-proven)
 - **Behaviour**: `opencode` and `pi-agent` skeletons stay **un-exported** (absent
@@ -156,9 +168,11 @@ Honest status, because "implemented" ≠ "observed enforcing":
 - **Distro + macOS harnesses** — fully written but **never executed on real
   infra**; both gated. Their oracle assertions *are* the failing tests; making
   them pass on real hardware is slices 4.2/4.3.
-- **Remaining no-test gap**: macOS UDP fail-closed (4.6) is named by ADR-0006 but
-  backed by no test (needs a real mac). The roadmap-skeleton guard (4.7) is now
-  closed by `roadmap-skeletons-guarded`.
+- **No ADR-named behaviour is unbacked any more.** macOS UDP (4.6) now has a
+  check whose mechanics are verified on Linux; only its Seatbelt verdict awaits a
+  mac. The roadmap-skeleton guard (4.7) is closed by `roadmap-skeletons-guarded`.
+  What remains is *validation on real infra* (distro/macOS harnesses, slices
+  4.2–4.5), not missing tests.
 
 ## 6. Adding an invariant
 

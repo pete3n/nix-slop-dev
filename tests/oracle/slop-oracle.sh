@@ -56,6 +56,7 @@ In-env checks (run inside the Slop Env):
   net-allow    <url>         a whitelisted endpoint returns data within timeout
   net-deny     <url>         a non-whitelisted endpoint yields no data (closed)
   net-deny-raw <host> <port> a raw (non-proxy) TCP connect fails closed
+  net-deny-udp <host> <port> a UDP datagram to an echo stub fails closed
   path-hidden  <path>        a confined-out path is not readable
   path-rw      <dir>         the project dir accepts create+read+delete
   no-host-bin  <name>        a host binary is absent from the confined PATH
@@ -112,6 +113,39 @@ check_net_deny_raw() {
 	pass net-deny-raw "raw TCP to $host:$port refused — failed closed"
 }
 
+check_net_deny_udp() {
+	# UDP fail-closed (ADR-0003 — the macOS Seatbelt profile is
+	# `(deny network-outbound)` save the proxy's localhost port, so UDP to any
+	# other host/port is dropped; there is no UDP allow path even with -a, the
+	# same reason `ping` cannot work). UDP is connectionless, so the sender
+	# cannot tell delivery from loss locally — we need an ECHO: send a token to
+	# a stub that bounces it back. Silence within the timeout (or a denied
+	# send) means the boundary dropped it; the token coming back means a
+	# non-proxy UDP egress leaked. On Linux this also holds (IPAddressDeny
+	# governs UDP), so it is a portable bonus there.
+	local host=$1 port=$2 token reply
+	[ -n "$host" ] && [ -n "$port" ] || fail net-deny-udp "usage: net-deny-udp <host> <port>"
+	token="slop-udp-$$"
+	# All socket I/O happens in a subshell, for two reasons:
+	#   - a refused connect makes `exec 3<>/dev/udp/...` a *fatal* redirection
+	#     error (it would kill this script even inside `if ! exec`); confining
+	#     it to the subshell turns that into an empty reply == failed-closed.
+	#   - UDP delivers one datagram per read(), so `dd bs=… count=1` returns the
+	#     whole echo regardless of a trailing newline — unlike `read -t`, which
+	#     on a newline-less datagram times out without assigning $reply.
+	# `timeout` bounds the wait (already a dependency of net-deny-raw); any bytes
+	# carrying the token mean the datagram escaped and was echoed back.
+	reply=$(
+		exec 3<>"/dev/udp/$host/$port" 2>/dev/null || exit 0
+		printf '%s' "$token" >&3 2>/dev/null || exit 0
+		timeout "$NET_TIMEOUT" dd bs=65535 count=1 <&3 2>/dev/null || true
+	)
+	case "$reply" in
+		*"$token"*) fail net-deny-udp "UDP echo from $host:$port returned the token — egress leaked" ;;
+	esac
+	pass net-deny-udp "no UDP echo from $host:$port — failed closed"
+}
+
 check_path_hidden() {
 	local path=$1
 	if cat -- "$path" >/dev/null 2>&1; then
@@ -166,6 +200,7 @@ main() {
 		net-allow)        check_net_allow "$@" ;;
 		net-deny)         check_net_deny "$@" ;;
 		net-deny-raw)     check_net_deny_raw "$@" ;;
+		net-deny-udp)     check_net_deny_udp "$@" ;;
 		path-hidden)      check_path_hidden "$@" ;;
 		path-rw)          check_path_rw "$@" ;;
 		no-host-bin)      check_no_host_bin "$@" ;;

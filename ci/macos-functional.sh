@@ -25,7 +25,13 @@
 #   2. net-deny-raw assumes Seatbelt allows only the proxy's loopback port,
 #      not all of loopback. If all loopback is open it will (correctly) flag a
 #      non-proxy egress leak.
-#   3. Live OAuth creds-persist is NOT covered here (needs an interactive login
+#   3. net-deny-udp shares #2's loopback rationale: the Seatbelt profile is
+#      `(deny network-outbound)` save the proxy port (ADR-0003), so UDP to the
+#      echo stub must be dropped even with -a. It needs `timeout`+`dd` on the
+#      jail PATH (as net-deny-raw needs `timeout`). The oracle counts a denied
+#      send OR a missing echo as failed-closed, so it is robust to whether
+#      Seatbelt blocks at sendto or silently drops the datagram.
+#   4. Live OAuth creds-persist is NOT covered here (needs an interactive login
 #      + real network to Anthropic); the eval check darwin-creds-persist-in-
 #      cfgdir guards that wiring. The "no live effect on a RUNNING session"
 #      half of the --wl-add quirk is also deferred (needs a backgrounded
@@ -55,7 +61,22 @@ echo SLOP_STUB_OK > "$STUBDIR/index.html"
 python3 -m http.server "$STUB_PORT" --bind "$STUB_IP" --directory "$STUBDIR" \
   >"$STUBDIR/stub.log" 2>&1 &
 STUB_PID=$!
-trap 'kill "$STUB_PID" 2>/dev/null || true' EXIT INT TERM
+
+# UDP echo stub on the same loopback IP, different port. The Seatbelt profile
+# denies all network-outbound except the proxy's localhost port (ADR-0003), so
+# a UDP datagram to this port must be dropped inside the jail; bouncing the
+# payload back lets the oracle tell "dropped" (no reply) from "escaped".
+UDP_PORT=$(( (RANDOM % 2000) + 20000 ))
+python3 -c "
+import socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(('${STUB_IP}', ${UDP_PORT}))
+while True:
+    data, addr = sock.recvfrom(65535)
+    sock.sendto(data, addr)
+" >"$STUBDIR/udp.log" 2>&1 &
+UDP_PID=$!
+trap 'kill "$STUB_PID" "$UDP_PID" 2>/dev/null || true' EXIT INT TERM
 
 # Plant a host secret OUTSIDE the jail's curated view.
 SECRET="$HOME/.ssh/id_secret"
@@ -90,6 +111,27 @@ check jail "$JS" -q -- -c \
 # Non-proxy egress fails closed: a RAW TCP connect to the stub is denied by
 # Seatbelt even though -a whitelists it for the proxy path (ADR-0003).
 check net-deny-raw "$JS" -q -a "$STUB_IP" -- -c "slop-oracle net-deny-raw '$STUB_IP' '$STUB_PORT'"
+
+# UDP fails closed (ADR-0003 "UDP/raw"): UDP has no proxy path either, so a
+# datagram to the stub must be dropped by Seatbelt even with -a whitelisting it.
+# Positive control first (UNCONFINED, no Seatbelt, no host `timeout` dep): prove
+# the echo stub round-trips, so the confined "failed closed" below means denial,
+# not a dead stub.
+if python3 -c "
+import socket, sys
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.settimeout(3)
+sock.sendto(b'slop-udp-control', ('${STUB_IP}', ${UDP_PORT}))
+try:
+    data, _ = sock.recvfrom(65535)
+except socket.timeout:
+    sys.exit(1)
+sys.exit(0 if data == b'slop-udp-control' else 1)
+"; then
+  echo "PASS udp-control: UDP echo stub round-trips unconfined"
+else
+  echo "FAIL udp-control: stub not echoing unconfined — confined result meaningless"; fail=1
+fi
+check net-deny-udp "$JS" -q -a "$STUB_IP" -- -c "slop-oracle net-deny-udp '$STUB_IP' '$UDP_PORT'"
 
 # TMPDIR redirect (HITL 2026-06-19): inside the jail $TMPDIR points into the
 # writable cfgDir, while /tmp is denied by (deny default). Single-quoted so
