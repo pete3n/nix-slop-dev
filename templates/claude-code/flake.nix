@@ -36,6 +36,12 @@
               # needs no hunk input of its own.
               hunk = nix-slop-dev.packages.${system}.hunk;
 
+              # worktrunk (`wt`) is re-exported the same way. Unlike hunk its
+              # skills are not in the package output, so they're vendored into
+              # claude-config/skills (refreshed by hand) and ride along in the
+              # bundle below — no per-package merge step here.
+              worktrunk = nix-slop-dev.packages.${system}.worktrunk;
+
               # Merge the checked-in skills with hunk's packaged review skill
               # into one bundle, then bind that single dir as skillsDir.
               # Binding hunk-review *under* the read-only skills mount at
@@ -58,10 +64,15 @@
               # drive a review with `hunk session …`) and this dev shell (so
               # you can watch the `hunk diff` TUI in another terminal). The
               # two halves rendezvous on the loopback broker. See ADR-0007.
-              projectPkgs = [ hunk ];
+              # worktrunk rides alongside it so `wt` is on both the jail and
+              # dev-shell PATH for parallel worktree workflows.
+              projectPkgs = [
+                hunk
+                worktrunk
+              ];
 
               # Add your project's packages and env here
-              # projectPkgs = [ hunk pkgs.lua-language-server pkgs.stylua ];
+              # projectPkgs = [ hunk worktrunk pkgs.lua-language-server pkgs.stylua ];
               # projectEnv = { FOO = "bar"; };
             };
         }
