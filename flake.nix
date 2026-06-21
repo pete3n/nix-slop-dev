@@ -246,26 +246,32 @@
               '';
 
             # Darwin parallel for apps.${system}.opencode (ADR-0010). opencode
-            # has NO placeholder (the parent ~/.local/state/opencode rw bind +
-            # launcher mkdir replace the per-project sed), so — unlike the
-            # claude/pi Darwin checks — this asserts the Scratch/Exchange forward
-            # on the Darwin opencode launcher and the ABSENCE of the sentinel in
-            # the per-jail wrapper.
+            # has NO placeholder: the parent ~/.local/state/opencode rw bind +
+            # the launcher's runtime mkdir replace the per-project sed. So this
+            # asserts, on the Darwin opencode LAUNCHER, both the Scratch/Exchange
+            # forward and the ABSENCE of the sentinel.
+            #
+            # NB: grep the launcher, NOT the per-jail sandboxed-jailed-opencode
+            # WRAPPER. The sandboxed-darwin sed pipeline
+            # (packages/sandboxed-darwin/render.nix mkProfileSedPipeline) bakes
+            # the `s|/projects/__SLOP_ENV_PROJECT_NAME__|…|` rewrite into EVERY
+            # jail wrapper unconditionally — a no-op for opencode (which has no
+            # such bind), but the literal string is still present. The ADR-0010
+            # guarantee is about the launcher the user runs, not that shared
+            # wrapper machinery.
             apps-opencode-darwin-scratch-exchange =
               let
                 slop = self.lib.slopEnv pkgs;
                 ocBins = slop.mkBins { agent = slop.profiles.opencode; };
-                sandboxedOcWrapper = builtins.head ocBins.sandboxedPackages;
               in
               pkgs.runCommand "apps-opencode-darwin-scratch-exchange" { } ''
-                if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e OPENCODE_EXCHANGE_DIR' \
-                     ${ocBins.agent}/bin/opencode; then
+                launcher=${ocBins.agent}/bin/opencode
+                if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e OPENCODE_EXCHANGE_DIR' "$launcher"; then
                   echo "FAIL: darwin opencode launcher does not forward TMPDIR + OPENCODE_EXCHANGE_DIR" >&2
                   exit 1
                 fi
-                if ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' \
-                     ${sandboxedOcWrapper}/bin/sandboxed-jailed-opencode; then
-                  echo "FAIL: sandboxed-jailed-opencode wrapper contains __SLOP_ENV_PROJECT_NAME__ — ADR-0010 says it must not" >&2
+                if ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' "$launcher"; then
+                  echo "FAIL: darwin opencode launcher contains __SLOP_ENV_PROJECT_NAME__ — ADR-0010 says it must not" >&2
                   exit 1
                 fi
                 echo "ok" > $out
