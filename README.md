@@ -169,11 +169,15 @@ Available templates:
   skills.
 - `claude-code-nvim-dev` — same plus `lua-language-server`, Neovim
   plugin-dev tooling, and headless test plumbing.
+- `pi-agent` — Slop Env preconfigured for Pi
+  ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
+  Claude Code, with an `enableLocalAi` toggle for a local ollama provider.
+  Same Sandbox / Jail guarantees; see [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
+  for the Agent Profile abstraction behind it.
 
-Additional templates (`opencode`, `pi-agent`) are planned — see
-[Roadmap](#roadmap). Customisation recipes for combinators, project
-packages, and env-var forwarding live in
-[docs/usage.md](docs/usage.md).
+An additional template (`opencode`) is planned — see [Roadmap](#roadmap).
+Customisation recipes for combinators, project packages, and env-var
+forwarding live in [docs/usage.md](docs/usage.md).
 
 **Host-config modules**:
 
@@ -276,11 +280,8 @@ Planned work, not yet implemented:
 - **`opencode` template** — Slop Env preconfigured for
   [opencode](https://github.com/sst/opencode) instead of Claude Code, so
   teams running a different agent get the same Sandbox / Jail guarantees.
-- **`pi-agent` template** — Slop Env preconfigured for
-  [Pi](https://pi.dev/) ([earendil-works/pi](https://github.com/earendil-works/pi)),
-  giving that agent harness the same Sandbox / Jail guarantees as the
-  Claude Code and (planned) opencode templates.
 
-Both templates exist as skeleton files (`templates/opencode/`,
-`templates/pi-agent/`) but are not exported from the flake yet. Track
-progress via repo issues; contributions welcome.
+The skeleton exists at `templates/opencode/` but is not exported from the
+flake yet. (The `pi-agent` template has shipped — see
+[Templates](#templates).) Track progress via repo issues; contributions
+welcome.

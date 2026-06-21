@@ -34,14 +34,27 @@ _Avoid_: allowlist
 
 **Slop Env**:
 A per-project AI-agent harness composed of a Sandbox and a Jail. The unit a
-user "enters" when they run `claude` or `jail-shell`. Produced by
+user "enters" when they run their agent (e.g. `claude`, `pi`) or
+`jail-shell`. Produced by
 `nix-slop-dev.lib.${system}.mkSlopEnvBins { ... }` and consumed by the
-`claude-code` / `claude-code-nvim-dev` templates (for greenfield projects)
-and the `apps.${system}.{claude,jail-shell}` zero-touch entry points (for
-existing-flake projects). Combines both confinement boundaries into one
-artifact; an agent run outside a Slop Env has neither.
+`claude-code` / `claude-code-nvim-dev` / `pi-agent` templates (for greenfield
+projects) and the `apps.${system}.{claude,jail-shell}` zero-touch entry points
+(for existing-flake projects). Which agent it confines is set by an Agent
+Profile — Claude Code by default; Pi via the `pi-agent` template. Combines
+both confinement boundaries into one artifact; an agent run outside a Slop Env
+has neither.
 _Avoid_: agent shell (overloaded — used generically for any AI session),
 sandbox (collides with Sandbox), jail (collides with Jail)
+
+**Agent Profile**:
+The per-agent half of a Slop Env's configuration: which coding agent it
+confines (Claude Code, Pi, …) together with that agent's config-file layout,
+its credential and session locations, and the network hosts its provider
+needs. The Slop Env library carries one profile per supported agent; an
+agent-agnostic engine combines a profile with a project's Sandbox and Jail to
+emit the runnable bins. Claude Code is the default profile.
+_Avoid_: adapter, backend, agent kind, harness (collides with the agent's own
+naming)
 
 **Exchange**:
 The per-project, host-visible directory through which a user and a jailed

@@ -67,7 +67,7 @@
         devShells.default = slop.mkShell {
           name = "nvim-claude-devShell";
           projectName = "slop-dev-nvim-project"; # Update per-project
-          claudeMdFile = ./slop-env/claude-config/CLAUDE.md;
+          agentMdFile = ./slop-env/claude-config/CLAUDE.md;
           rulesDir = ./slop-env/claude-config/rules;
           skillsDir = skills;
 

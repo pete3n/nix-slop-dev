@@ -1,7 +1,7 @@
 { pkgs
 , sandboxed
 , prereqGuidance
-, claude-pkg
+, defaultProfile
 , jail
 , shared
 }:
@@ -24,9 +24,11 @@ let
 
   mkBins =
     { projectName ? projectNamePlaceholder
+    , agent ? defaultProfile
     , rulesDir ? ./defaults/rules
     , skillsDir ? null
-    , claudeMdFile ? ./defaults/CLAUDE.md
+    , agentMdFile ? ./defaults/CLAUDE.md
+    , enableLocalAi ? false
     , basePkgs ? shared.defaultBasePkgs
     , projectPkgs ? [ ]
     , projectEnv ? { }
@@ -34,17 +36,31 @@ let
     , extraShellHook ? ""
     , extraSandboxedEnvForwards ? [ ]
     }:
+    # Profiles that supply their own Linux builder (e.g. pi) take it; Claude is
+    # the built-in default path below, kept byte-identical (ADR-0009).
+    if agent ? mkLinuxBins then
+      agent.mkLinuxBins {
+        inherit projectName rulesDir skillsDir agentMdFile enableLocalAi
+          basePkgs projectPkgs projectEnv extraCombinators extraShellHook
+          extraSandboxedEnvForwards;
+        engine = {
+          inherit pkgs lib jail sandboxed prereqGuidance projectNamePlaceholder;
+        };
+      }
+    else if agent.name != "claude" then
+      throw "slopEnv (linux): agent '${agent.name}' provides no mkLinuxBins builder"
+    else
     let
-      claudeMd = shared.mkClaudeMd { inherit rulesDir claudeMdFile; };
-      claudeSettings = shared.defaultClaudeSettings;
+      claudeMd = agent.mkContext { inherit agentMdFile rulesDir; };
+      claudeSettings = agent.settings;
 
       jailCombinators =
-        (shared.mkJailCombinators {
+        (agent.mkJailCombinators {
           inherit jail projectName skillsDir claudeMd claudeSettings basePkgs projectPkgs projectEnv;
         })
         ++ extraCombinators;
 
-      jailedClaude = jail "jailed-claude" claude-pkg jailCombinators;
+      jailedClaude = jail agent.jailedName agent.package jailCombinators;
       jailedShell = jail "jailed-shell" pkgs.bashInteractive jailCombinators;
 
       # Linux currently has one sandboxed wrapper for both jails (slice 21
@@ -204,7 +220,12 @@ let
         '';
     in
     {
-      inherit claude jail-shell jailedClaude jailedShell sandboxedPackages shellHook;
+      # Output keys are agent-neutral (ADR-0009): `agent` is the wrapper bin,
+      # `jailedAgent` the jailed agent derivation — the local bindings keep
+      # their historical claude names since this is the built-in claude path.
+      agent = claude;
+      jailedAgent = jailedClaude;
+      inherit jail-shell jailedShell sandboxedPackages shellHook;
     };
 
   mkShell = args:
@@ -219,7 +240,7 @@ let
     in
     pkgs.mkShell {
       name = args.name or "nix-shell";
-      packages = projectPkgs ++ bins.sandboxedPackages ++ [ bins.jailedClaude bins.jailedShell ];
+      packages = projectPkgs ++ bins.sandboxedPackages ++ [ bins.jailedAgent bins.jailedShell ];
       inherit (bins) shellHook;
     };
 in

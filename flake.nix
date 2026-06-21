@@ -126,12 +126,13 @@
               "jail"
               "mkBins"
               "mkShell"
+              "profiles"
             ];
             slopActual = builtins.attrNames slop;
             binsExpected = [
-              "claude"
+              "agent"
               "jail-shell"
-              "jailedClaude"
+              "jailedAgent"
               "jailedShell"
               "sandboxedPackages"
               "shellHook"
@@ -139,7 +140,7 @@
             binsActual = builtins.attrNames (
               slop.mkBins {
                 projectName = "byteq-test";
-                claudeMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
+                agentMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
                 rulesDir = ./templates/claude-code/slop-env/claude-config/rules;
                 skillsDir = ./templates/claude-code/slop-env/claude-config/skills;
               }
@@ -267,7 +268,7 @@
                   !(pkgs.lib.hasInfix "CLAUDE_SHARED_DIR/.credentials.json" bins.shellHook);
                 noCredSymlink =
                   !(builtins.any (line: pkgs.lib.hasInfix ".credentials.json" line)
-                    bins.jailedClaude.jailData.preflight);
+                    bins.jailedAgent.jailData.preflight);
               in
               if checksConfigDir && noSharedCredCheck && noCredSymlink then
                 pkgs.runCommand "darwin-creds-persist-in-cfgdir" { } ''
@@ -285,11 +286,11 @@
             darwin-tmpdir-redirected =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
-                forwardsTmpdir = builtins.elem "TMPDIR" bins.jailedClaude.jailData.envForward;
+                forwardsTmpdir = builtins.elem "TMPDIR" bins.jailedAgent.jailData.envForward;
               in
               if forwardsTmpdir then
                 pkgs.runCommand "darwin-tmpdir-redirected" { } ''
-                  launcher=${bins.claude}/bin/claude
+                  launcher=${bins.agent}/bin/claude
                   if ! ${pkgs.gnugrep}/bin/grep -qF 'export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"' "$launcher"; then
                     echo "FAIL: claude launcher doesn't redirect TMPDIR into cfgDir — agent temp would hit jail-denied /tmp" >&2
                     cat "$launcher" >&2
@@ -308,11 +309,11 @@
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
                 forwardsExchange =
-                  builtins.elem "CLAUDE_EXCHANGE_DIR" bins.jailedClaude.jailData.envForward;
+                  builtins.elem "CLAUDE_EXCHANGE_DIR" bins.jailedAgent.jailData.envForward;
               in
               if forwardsExchange then
                 pkgs.runCommand "darwin-exchange-forwarded" { } ''
-                  launcher=${bins.claude}/bin/claude
+                  launcher=${bins.agent}/bin/claude
                   if ! ${pkgs.gnugrep}/bin/grep -qF 'export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"' "$launcher"; then
                     echo "FAIL: claude launcher doesn't export CLAUDE_EXCHANGE_DIR into cfgDir" >&2
                     cat "$launcher" >&2
@@ -334,6 +335,7 @@
               "jail"
               "mkBins"
               "mkShell"
+              "profiles"
             ];
             actual = builtins.attrNames slop;
           in
@@ -387,14 +389,14 @@
               let
                 bins = slop.mkBins {
                   projectName = "byteq-test";
-                  claudeMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
+                  agentMdFile = ./templates/claude-code/slop-env/claude-config/CLAUDE.md;
                   rulesDir = ./templates/claude-code/slop-env/claude-config/rules;
                   skillsDir = ./templates/claude-code/slop-env/claude-config/skills;
                 };
                 expectedKeys = [
-                  "claude"
+                  "agent"
                   "jail-shell"
-                  "jailedClaude"
+                  "jailedAgent"
                   "jailedShell"
                   "sandboxedPackages"
                   "shellHook"
@@ -434,7 +436,7 @@
                 bins = (self.lib.slopEnv pkgs).mkBins { };
               in
               pkgs.runCommand "apps-jail-has-placeholder" { } ''
-                if ! grep -q "__SLOP_ENV_PROJECT_NAME__" ${bins.jailedClaude}/bin/jailed-claude; then
+                if ! grep -q "__SLOP_ENV_PROJECT_NAME__" ${bins.jailedAgent}/bin/jailed-claude; then
                   echo "expected __SLOP_ENV_PROJECT_NAME__ placeholder in jailed-claude launch script" >&2
                   exit 1
                 fi
@@ -449,19 +451,20 @@
               inherit pkgs;
             };
 
-            # ADR-0006 consequence: the roadmap skeletons (opencode, pi-agent)
-            # stay UN-EXPORTED (absent from the flake `templates` output) and
-            # STILL PARSE, until they are promoted to real templates. A cheap
-            # eval guard so a skeleton can neither rot into a parse error
-            # unnoticed nor be shipped before it is ready. `import` parses the
-            # whole file and returns its builder function; forcing to a lambda
+            # ADR-0006 consequence: the roadmap skeleton (opencode) stays
+            # UN-EXPORTED (absent from the flake `templates` output) and STILL
+            # PARSES, until it is promoted to a real template. A cheap eval
+            # guard so a skeleton can neither rot into a parse error unnoticed
+            # nor be shipped before it is ready. `import` parses the whole file
+            # and returns its builder function; forcing to a lambda
             # (isFunction) proves it parses without evaluating the heavy body
             # (which needs inputs/pkgs/makeNix* it is never given here).
+            # pi-agent graduated to a real template (ADR-0009) — see the
+            # `templates` output and tests/template-pi-agent-drv.
             roadmap-skeletons-guarded =
               let
                 skeletons = {
                   opencode = ./templates/opencode/opencode.nix;
-                  pi-agent = ./templates/pi-agent/pi-agent.nix;
                 };
                 names = builtins.attrNames skeletons;
                 exportedTemplates = builtins.attrNames self.templates;
@@ -532,7 +535,7 @@
               in
               if exportsTmpdir && exportsExchange && forwardsBoth then
                 pkgs.runCommand "lib-slop-env-scratch-exchange" { } ''
-                  for launcher in ${bins.claude}/bin/claude ${bins.jail-shell}/bin/jail-shell; do
+                  for launcher in ${bins.agent}/bin/claude ${bins.jail-shell}/bin/jail-shell; do
                     if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e CLAUDE_EXCHANGE_DIR' "$launcher"; then
                       echo "FAIL: $launcher does not forward TMPDIR + CLAUDE_EXCHANGE_DIR through sandboxed" >&2
                       exit 1
@@ -614,6 +617,13 @@
                     flake-utils
                     gen-luarc
                     ;
+                };
+
+                # Byte-equality baseline for the pi-agent template (ADR-0009).
+                # Injects `self` so the template builds against local lib
+                # changes (its own nix-slop-dev input is the published flake).
+                template-pi-agent-drv = import ./tests/template-pi-agent-drv.nix {
+                  inherit self pkgs;
                 };
               }
             else
@@ -713,7 +723,7 @@
         {
           claude = {
             type = "app";
-            program = "${bins.claude}/bin/claude";
+            program = "${bins.agent}/bin/claude";
           };
           jail-shell = {
             type = "app";
@@ -752,6 +762,7 @@
             sandboxed = self.packages.${system}.sandboxed;
             prereqGuidance = if isDarwin then null else self.packages.${system}.prereq-guidance;
             claude-pkg = llm-agents.packages.${system}.claude-code;
+            pi-pkg = llm-agents.packages.${system}.pi;
             # Linux: jail-nix's __functor (bwrap-based combinators).
             # Darwin: nix-slop-dev's Seatbelt combinator library.
             jail = if isDarwin then self.lib.jail pkgs else jail-nix.lib.init pkgs;
@@ -794,6 +805,11 @@
         claude-code-nvim-dev = {
           path = ./templates/claude-code-nvim-dev;
           description = "Jailed Claude Code environment for Neovim plugin development with lua tooling and headless test support";
+        };
+
+        pi-agent = {
+          path = ./templates/pi-agent;
+          description = "Jailed Pi (earendil-works/pi) environment with sandboxed network isolation";
         };
       };
     };

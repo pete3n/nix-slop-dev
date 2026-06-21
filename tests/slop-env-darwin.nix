@@ -26,16 +26,16 @@ let
   # writeText internally at build time; we re-emit it here for
   # standalone inspection.
   placeholderSbpl = pkgs.writeText "darwin-apps-jail-sbpl"
-    placeholderBins.jailedClaude.jailData.sbpl;
+    placeholderBins.jailedAgent.jailData.sbpl;
 
   # First per-jail wrapper: sandboxed-jailed-claude. Carries the
   # rendered preflight/cleanup blocks slices 1+2 + 5b touch.
   placeholderWrapper = builtins.head placeholderBins.sandboxedPackages;
 in
 pkgs.runCommand "slop-env-darwin-launcher-tests" { } ''
-  CLAUDE_PLACEHOLDER=${placeholderBins.claude}/bin/claude
+  CLAUDE_PLACEHOLDER=${placeholderBins.agent}/bin/claude
   JAILSHELL_PLACEHOLDER=${placeholderBins.jail-shell}/bin/jail-shell
-  CLAUDE_CONCRETE=${concreteBins.claude}/bin/claude
+  CLAUDE_CONCRETE=${concreteBins.agent}/bin/claude
   PLACEHOLDER_SBPL=${placeholderSbpl}
   PLACEHOLDER_WRAPPER=${placeholderWrapper}/bin/sandboxed-jailed-claude
 

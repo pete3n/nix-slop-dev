@@ -45,11 +45,13 @@ in
     };
   };
 
-  # Assemble the CLAUDE.md contents: base file + every rules/*.md
-  # concatenated. Universal policy is always in context (unlike
+  # Assemble the always-in-context instructions file: base file + every
+  # rules/*.md concatenated. Universal policy is always in context (unlike
   # relevance-recalled memory, which is per-project and dynamically pathed).
-  mkClaudeMd =
-    { claudeMdFile, rulesDir }:
+  # Agent-neutral — Claude loads it as CLAUDE.md, Pi as AGENTS.md; the profile
+  # decides the destination filename.
+  mkContextMd =
+    { contextMdFile, rulesDir }:
     let
       ruleNames = builtins.attrNames (
         lib.filterAttrs (name: kind: kind == "regular" && lib.hasSuffix ".md" name) (
@@ -58,7 +60,7 @@ in
       );
       ruleBodies = map (name: builtins.readFile (rulesDir + "/${name}")) ruleNames;
     in
-    lib.concatStringsSep "\n\n" ([ (builtins.readFile claudeMdFile) ] ++ ruleBodies);
+    lib.concatStringsSep "\n\n" ([ (builtins.readFile contextMdFile) ] ++ ruleBodies);
 
   # Standard slop-env jail combinator list. Per-OS layers can append
   # additional combinators (e.g. Darwin's host-resolve for /etc/* symlinks)
