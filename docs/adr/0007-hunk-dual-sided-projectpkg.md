@@ -53,10 +53,15 @@ one bundle at build time (`runCommand`) and binds that single directory as
   documented escape hatch is `HUNK_MCP_PORT`. Per-project port computation was
   deferred until that collision is felt.
 - hunk is built from source (bun2nix) on first `nix develop`; no binary-cache
-  substituter is configured. Adding `nix-community.cachix.org` to the core
-  flake's `nixConfig.extra-substituters` was deferred — it trades a one-time
-  trust prompt for skipping the source build, to be revisited once the build
-  cost is measured.
+  substituter is configured. `nix-community.cachix.org` cannot help while
+  `follows` repins hunk to our nixpkgs (its cached build is keyed to hunk's
+  own nixos-unstable), so a consuming-flake substituter would always miss.
+  The from-source cost was measured at ~14m on `ubuntu-latest` in the PR gate
+  (mostly the npm dep fetch). Rather than drop `follows` to chase the upstream
+  cache, the PR gate (`pr-checks.yml`) persists the Nix store across runs via
+  `nix-community/cache-nix-action` keyed on `flake.lock`, so hunk rebuilds
+  only when its pin moves; a single nixpkgs is retained. Local `nix develop`
+  still pays the one-time source build.
 - nix-slop-dev core now carries a third-party package input. Merely holding the
   input is cheap (lock entries); only consumers who place the re-export in
   `projectPkgs` pay the build cost.
