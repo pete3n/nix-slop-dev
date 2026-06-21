@@ -6,6 +6,16 @@
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
 
+    # Second nixpkgs, tracking unstable, used ONLY to source a current
+    # worktrunk (`wt`). worktrunk is in our pinned 26.05 too (0.50.0), but it
+    # moves fast and unstable ships a newer release. Re-exported as
+    # packages.${system}.worktrunk (mirroring the hunk pattern, ADR-0007) so
+    # templates + the outer dev-shell flake consume `wt` through nix-slop-dev
+    # without each carrying an unstable input. The extra nixpkgs lock entry
+    # is the accepted cost of staying current. See ADR-0008 (worktrunk's
+    # skills are vendored by hand — the deliberate divergence from hunk).
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+
     # Review-first terminal diff viewer (ADR-0007). Taken once here and
     # re-exported as packages.${system}.hunk so templates and the outer
     # dev-shell flake consume it through nix-slop-dev without their own
@@ -25,6 +35,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-unstable,
       jail-nix,
       llm-agents,
       flake-utils,
@@ -74,6 +85,12 @@
             # Re-export (ADR-0007): dual-sided review tool consumed via
             # projectPkgs by the templates + outer dev-shell flake.
             hunk = hunk.packages.${system}.default;
+            # Re-export of unstable's worktrunk (`wt`), consumed via
+            # projectPkgs like hunk. Sourced from nixpkgs-unstable for a
+            # newer release than our 26.05 pin ships. Its skills are not in
+            # the package, so they're vendored into the templates'
+            # claude-config/skills and maintained by hand.
+            worktrunk = nixpkgs-unstable.legacyPackages.${system}.worktrunk;
             default = self.packages.${system}.sandboxed;
           }
         else
@@ -86,6 +103,12 @@
             # Re-export (ADR-0007): dual-sided review tool consumed via
             # projectPkgs by the templates + outer dev-shell flake.
             hunk = hunk.packages.${system}.default;
+            # Re-export of unstable's worktrunk (`wt`), consumed via
+            # projectPkgs like hunk. Sourced from nixpkgs-unstable for a
+            # newer release than our 26.05 pin ships. Its skills are not in
+            # the package, so they're vendored into the templates'
+            # claude-config/skills and maintained by hand.
+            worktrunk = nixpkgs-unstable.legacyPackages.${system}.worktrunk;
             default = self.packages.${system}.sandboxed;
           }
       );
@@ -132,6 +155,26 @@
             #   - lib-slop-env-{shape,mkBins-shape}: darwin.nix
             #     dispatch matches the Linux contract.
             sandbox-proxy = import ./tests/sandbox-proxy.nix { inherit pkgs; };
+
+            # worktrunk is re-exported (like hunk, ADR-0007) from
+            # nixpkgs-unstable so templates consume `wt` via nix-slop-dev
+            # without their own input. Eval-only structural guard: if the
+            # re-export is dropped, or worktrunk disappears/renames in
+            # unstable, this fails here rather than at template build time.
+            # Touches only meta, so it does not force a worktrunk build.
+            worktrunk-reexport =
+              let
+                worktrunkPkg = self.packages.${system}.worktrunk;
+                isDrv = pkgs.lib.isDerivation worktrunkPkg;
+                mainProgram = worktrunkPkg.meta.mainProgram or null;
+              in
+              if isDrv && mainProgram == "wt" then
+                pkgs.runCommand "worktrunk-reexport" { } ''
+                  echo "worktrunk re-export resolves to a derivation with mainProgram=wt" > $out
+                ''
+              else
+                throw "worktrunk re-export regressed: isDrv=${pkgs.lib.boolToString isDrv} mainProgram=${toString mainProgram}";
+
             sandbox-profile = import ./tests/sandbox-profile.nix {
               inherit pkgs;
               inherit (pkgs) lib;
@@ -302,6 +345,25 @@
                 ''
               else
                 throw "lib.slopEnv shape regressed. expected: ${builtins.concatStringsSep " " expected} actual: ${builtins.concatStringsSep " " actual}";
+
+            # worktrunk is re-exported (like hunk, ADR-0007) from
+            # nixpkgs-unstable so templates consume `wt` via nix-slop-dev
+            # without their own input. Eval-only structural guard: if the
+            # re-export is dropped, or worktrunk disappears/renames in
+            # unstable, this fails here rather than at template build time.
+            # Touches only meta, so it does not force a worktrunk build.
+            worktrunk-reexport =
+              let
+                worktrunkPkg = self.packages.${system}.worktrunk;
+                isDrv = pkgs.lib.isDerivation worktrunkPkg;
+                mainProgram = worktrunkPkg.meta.mainProgram or null;
+              in
+              if isDrv && mainProgram == "wt" then
+                pkgs.runCommand "worktrunk-reexport" { } ''
+                  echo "worktrunk re-export resolves to a derivation with mainProgram=wt" > $out
+                ''
+              else
+                throw "worktrunk re-export regressed: isDrv=${pkgs.lib.boolToString isDrv} mainProgram=${toString mainProgram}";
 
             # Defaults are populated from shared.nix
             # The list must include coreutils.

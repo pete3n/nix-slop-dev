@@ -45,6 +45,10 @@
         # binary without a runtime nested bind (which would EROFS under the
         # read-only skills mount).
         hunk = nix-slop-dev.packages.${system}.hunk;
+        # worktrunk (`wt`) re-exported the same way. Its skills aren't in the
+        # package output, so they're vendored into claude-config/skills
+        # (refreshed by hand) and ride along in the bundle below.
+        worktrunk = nix-slop-dev.packages.${system}.worktrunk;
         skills = pkgs.runCommand "nvim-dev-skills" { } ''
           mkdir -p "$out"
           cp -r ${./slop-env/claude-config/skills}/. "$out/"
@@ -69,7 +73,8 @@
 
           # hunk in projectPkgs reaches BOTH the jail (agent `hunk session …`)
           # and this dev shell (your `hunk diff` TUI). See ADR-0007. The
-          # let-bound `hunk` shadows any `with pkgs` attr of the same name.
+          # let-bound `hunk`/`worktrunk` shadow any `with pkgs` attr of the
+          # same name. worktrunk (`wt`) is dual-sided the same way.
           projectPkgs = with pkgs; [
             lua-language-server
             nixd
@@ -78,6 +83,7 @@
             luajitPackages.busted
             nvimDev
             hunk
+            worktrunk
           ];
 
           # Wired into the jail via set-env combinators (lib auto-derives
