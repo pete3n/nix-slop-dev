@@ -112,14 +112,19 @@ let
 
       (ro-bind envSrc "/usr/bin/env")
 
-      # Config injected read-only from the store into the GLOBAL agent dir.
+      # Whole agent dir, host-backed rw + persistent. Pi creates lock dirs
+      # (settings.json.lock / auth.json.lock — proper-lockfile uses mkdir),
+      # writes auth.json on /login, caches packages under npm/, and persists
+      # trust.json / themes / tools / bin — all of which need ~/.pi/agent itself
+      # writable, not just individual files. This is also the "login once,
+      # global agent dir" model. Must precede the write-text overlays below so
+      # they layer on top (bwrap bind order; Seatbelt allows are additive).
+      # HITL 2026-06-21: without this, pi EPERMs on settings.json.lock at start.
+      (try-readwrite (noescape "~/.pi/agent"))
+
+      # Nix-injected config, overlaid on top of the writable agent dir.
       (write-text (noescape "~/.pi/agent/settings.json") (builtins.toJSON piSettings))
       (write-text (noescape "~/.pi/agent/AGENTS.md") contextMd)
-
-      # Global, host-backed: `/login` writes auth.json here and it persists
-      # across projects. npm packages cache here too.
-      (try-readwrite (noescape "~/.pi/agent/auth.json"))
-      (try-readwrite (noescape "~/.pi/agent/npm"))
 
       # Per-project sessions (host-visible, isolated per projectName). The
       # launcher points PI_CODING_AGENT_SESSION_DIR here.
