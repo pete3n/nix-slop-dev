@@ -68,7 +68,7 @@ jobs:
       # still recovers most of the store (incl. hunk, which depends on
       # flake.lock not our .nix) on a lock bump, so worst case is a partial
       # rebuild rather than a cold 14m.
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-${{ matrix.system }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ matrix.system }}-
