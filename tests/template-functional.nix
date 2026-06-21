@@ -34,7 +34,7 @@ let
   claudeTemplate =
     (mkBins {
       projectName = "tmpl-claude";
-      claudeMdFile = ../templates/claude-code/slop-env/claude-config/CLAUDE.md;
+      agentMdFile = ../templates/claude-code/slop-env/claude-config/CLAUDE.md;
       rulesDir = ../templates/claude-code/slop-env/claude-config/rules;
       skillsDir = ../templates/claude-code/slop-env/claude-config/skills;
     }).jailedShell;
@@ -48,7 +48,7 @@ let
   nvimTemplate =
     (mkBins {
       projectName = "tmpl-nvim";
-      claudeMdFile = ../templates/claude-code-nvim-dev/slop-env/claude-config/CLAUDE.md;
+      agentMdFile = ../templates/claude-code-nvim-dev/slop-env/claude-config/CLAUDE.md;
       rulesDir = ../templates/claude-code-nvim-dev/slop-env/claude-config/rules;
       skillsDir = ../templates/claude-code-nvim-dev/slop-env/claude-config/skills;
       projectPkgs = with pkgs; [
@@ -56,6 +56,20 @@ let
         stylua
         luajitPackages.busted
       ];
+    }).jailedShell;
+
+  # pi-agent template: config args from templates/pi-agent/flake.nix, selecting
+  # the pi Agent Profile (ADR-0009). projectPkgs is omitted here — hunk/worktrunk
+  # presence rides in via the byte-eq drv check; this arm asserts the universal
+  # jail invariants for pi's combinator list (global ~/.pi/agent + per-project
+  # sessions, all via try- binds so no pre-seeded sources are required).
+  piTemplate =
+    (mkBins {
+      projectName = "tmpl-pi";
+      agent = (self.lib.slopEnv pkgs).profiles.pi;
+      agentMdFile = ../templates/pi-agent/slop-env/pi-config/AGENTS.md;
+      rulesDir = ../templates/pi-agent/slop-env/pi-config/rules;
+      skillsDir = ../templates/pi-agent/slop-env/pi-config/skills;
     }).jailedShell;
 in
 pkgs.testers.runNixOSTest {
@@ -100,6 +114,9 @@ pkgs.testers.runNixOSTest {
 
     # claude-code template jail: the universal jail invariants.
     template_jail("${claudeTemplate}/bin/jailed-shell", "/home/agent/proj-claude")
+
+    # pi-agent template jail: same universal invariants for the pi profile.
+    template_jail("${piTemplate}/bin/jailed-shell", "/home/agent/proj-pi")
 
     # nvim-dev template jail: same invariants, plus its lua tooling + headless
     # test plumbing must be present on the jail PATH.

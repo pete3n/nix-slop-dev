@@ -56,7 +56,7 @@
             in
             slop.mkShell {
               projectName = "nix-slop-dev"; # Update per-project
-              claudeMdFile = ./slop-env/claude-config/CLAUDE.md;
+              agentMdFile = ./slop-env/claude-config/CLAUDE.md;
               rulesDir = ./slop-env/claude-config/rules;
               skillsDir = skills;
 

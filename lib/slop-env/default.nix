@@ -2,6 +2,7 @@
 , sandboxed
 , prereqGuidance ? null
 , claude-pkg
+, pi-pkg
 , jail
 }:
 
@@ -9,12 +10,16 @@
 # See ADR-0005 for the L4/L5 boundary and the file-layout rationale.
 #
 # Public API (stable contract):
-#   slop.mkShell { projectName, rulesDir, skillsDir, claudeMdFile,
-#                  basePkgs?, projectPkgs?, projectEnv?, extraCombinators? }
+#   slop.mkShell { projectName, agent?, rulesDir, skillsDir, agentMdFile,
+#                  enableLocalAi?, basePkgs?, projectPkgs?, projectEnv?,
+#                  extraCombinators? }
 #     → pkgs.mkShell ...
 #   slop.mkBins  { same args }
 #     → { claude; jail-shell; jailedClaude; jailedShell;
 #         sandboxedPackages; shellHook; }
+#   slop.profiles
+#     → { claude; pi; }  the Agent Profiles selectable via the `agent` arg
+#       (ADR-0009). Defaults to `profiles.claude` when `agent` is omitted.
 #   slop.defaults
 #     → { basePkgs; claudeSettings; }
 #
@@ -27,14 +32,25 @@
 
 let
   shared = import ./shared.nix { inherit pkgs; };
+
+  # Agent Profiles (ADR-0009). Claude Code is the default; callers pick another
+  # via mkShell/mkBins' `agent` arg (e.g. `agent = slop.profiles.pi`).
+  claudeProfile = import ./profiles/claude.nix { inherit claude-pkg shared; };
+  piProfile = import ./profiles/pi.nix { inherit pi-pkg shared; };
+  profiles = {
+    claude = claudeProfile;
+    pi = piProfile;
+  };
+
   perOs =
     if pkgs.stdenv.isDarwin then
-      import ./darwin.nix { inherit pkgs sandboxed claude-pkg jail shared; }
+      import ./darwin.nix { inherit pkgs sandboxed jail shared; defaultProfile = claudeProfile; }
     else
-      import ./linux.nix { inherit pkgs sandboxed prereqGuidance claude-pkg jail shared; };
+      import ./linux.nix { inherit pkgs sandboxed prereqGuidance jail shared; defaultProfile = claudeProfile; };
 in
 {
   inherit (perOs) mkShell mkBins;
+  inherit profiles;
 
   defaults = {
     basePkgs = shared.defaultBasePkgs;

@@ -1,6 +1,6 @@
 { pkgs
 , sandboxed
-, claude-pkg
+, defaultProfile
 , jail
 , shared
 }:
@@ -21,9 +21,11 @@ let
 
   mkBins =
     { projectName ? projectNamePlaceholder
+    , agent ? defaultProfile
     , rulesDir ? ./defaults/rules
     , skillsDir ? null
-    , claudeMdFile ? ./defaults/CLAUDE.md
+    , agentMdFile ? ./defaults/CLAUDE.md
+    , enableLocalAi ? false
     , basePkgs ? shared.defaultBasePkgs
     , projectPkgs ? [ ]
     , projectEnv ? { }
@@ -31,9 +33,24 @@ let
     , extraShellHook ? ""
     , extraSandboxedEnvForwards ? [ ]
     }:
+    # Profiles that supply their own Darwin builder take it; Claude is the
+    # built-in default path below (ADR-0009). Profiles without a Darwin builder
+    # (e.g. pi) are rejected with a clear message rather than misbuilt.
+    if agent ? mkDarwinBins then
+      agent.mkDarwinBins {
+        inherit projectName rulesDir skillsDir agentMdFile enableLocalAi
+          basePkgs projectPkgs projectEnv extraCombinators extraShellHook
+          extraSandboxedEnvForwards;
+        engine = {
+          inherit pkgs lib jail sandboxed projectNamePlaceholder;
+        };
+      }
+    else if agent.name != "claude" then
+      throw "slopEnv (darwin): agent '${agent.name}' is not yet supported on Darwin"
+    else
     let
-      claudeMd = shared.mkClaudeMd { inherit rulesDir claudeMdFile; };
-      claudeSettings = shared.defaultClaudeSettings;
+      claudeMd = agent.mkContext { inherit agentMdFile rulesDir; };
+      claudeSettings = agent.settings;
 
       # nix-darwin's /etc/bashrc and /etc/zshenv source a hard-coded
       # /nix/store/.../set-environment path baked at activation time to
@@ -97,7 +114,7 @@ let
       ];
 
       jailCombinators =
-        (shared.mkJailCombinators {
+        (agent.mkJailCombinators {
           inherit jail projectName skillsDir claudeMd claudeSettings basePkgs projectPkgs projectEnv;
           # SIP keeps /usr/bin read-only on macOS; src and dst point to
           # the same host path (the jail's read-allow emits with no bind
@@ -116,7 +133,7 @@ let
         ++ darwinJailExtras
         ++ extraCombinators;
 
-      jailedClaude = jail.jail "jailed-claude" claude-pkg jailCombinators;
+      jailedClaude = jail.jail agent.jailedName agent.package jailCombinators;
       jailedShell = jail.jail "jailed-shell" pkgs.bashInteractive jailCombinators;
 
       # Per-jail sandboxed-darwin wrappers (issue 11 / ADR-0001 line 17):
@@ -236,7 +253,11 @@ let
       '';
     in
     {
-      inherit claude jail-shell jailedClaude jailedShell sandboxedPackages shellHook;
+      # Output keys are agent-neutral (ADR-0009); local bindings keep their
+      # historical claude names since this is the built-in claude path.
+      agent = claude;
+      jailedAgent = jailedClaude;
+      inherit jail-shell jailedShell sandboxedPackages shellHook;
     };
 
   mkShell = args:
@@ -248,9 +269,9 @@ let
     pkgs.mkShell {
       name = args.name or "nix-shell";
       packages = projectPkgs ++ bins.sandboxedPackages ++ [
-        bins.jailedClaude
+        bins.jailedAgent
         bins.jailedShell
-        bins.claude
+        bins.agent
         bins.jail-shell
       ];
       inherit (bins) shellHook;
