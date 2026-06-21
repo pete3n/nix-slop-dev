@@ -24,7 +24,11 @@ on:
 
 concurrency:
   group: pr-checks-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel superseded PR runs. A push to main warms the shared
+  # Nix-store cache, and the slow x86_64 job saves it in a post-step — so a
+  # main run must never be cancelled mid-build, or it never warms the cache
+  # and every PR keeps cold-building the nvim (IFD) + hunk closures (~14m).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
