@@ -51,7 +51,7 @@ jobs:
       matrix:
         test: [sandbox, wl-live-update, jail]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # nixosTest drives QEMU under KVM. GitHub's ubuntu runners expose
       # /dev/kvm but not group-accessible by default; this is the canonical
@@ -76,7 +76,7 @@ jobs:
     name: template functional
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -105,7 +105,7 @@ jobs:
         # Versions tracked in README's "Tested platforms" table.
         distro: [debian, ubuntu, fedora]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Enable KVM
         run: |
@@ -135,7 +135,7 @@ jobs:
         run: printf '%s' '${{ job.status }}' > "${{ matrix.distro }}.status"
       - name: upload status
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: status-${{ matrix.distro }}
           path: ${{ matrix.distro }}.status
@@ -155,7 +155,7 @@ jobs:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: cachix/install-nix-action@v30
         with:
@@ -203,7 +203,7 @@ jobs:
       - name: download per-distro status
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: status-*
           path: status
