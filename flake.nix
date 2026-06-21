@@ -226,6 +226,25 @@
                 echo "ok" > $out
               '';
 
+            # Darwin parallel for apps.${system}.pi (ADR-0009): the sentinel
+            # must survive into the per-jail sandboxed-jailed-pi wrapper so the
+            # placeholder launcher's NIX_SLOP_DEV_PROJECT_NAME substitution has
+            # a target.
+            apps-pi-darwin-jail-has-placeholder =
+              let
+                slop = self.lib.slopEnv pkgs;
+                piBins = slop.mkBins { agent = slop.profiles.pi; };
+                sandboxedPiWrapper = builtins.head piBins.sandboxedPackages;
+              in
+              pkgs.runCommand "apps-pi-darwin-jail-has-placeholder" { } ''
+                if ! ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' \
+                     ${sandboxedPiWrapper}/bin/sandboxed-jailed-pi; then
+                  echo "expected __SLOP_ENV_PROJECT_NAME__ in sandboxed-jailed-pi wrapper" >&2
+                  exit 1
+                fi
+                echo "ok" > $out
+              '';
+
             lib-slop-env-shape =
               if slopActual == slopExpected then
                 pkgs.runCommand "lib-slop-env-shape" { } ''
@@ -414,14 +433,15 @@
               let
                 claudeApp = self.apps.${system}.claude or null;
                 jailShellApp = self.apps.${system}.jail-shell or null;
+                piApp = self.apps.${system}.pi or null;
                 ok = app: app != null && (app.type or null) == "app" && (app.program or null) != null;
               in
-              if ok claudeApp && ok jailShellApp then
+              if ok claudeApp && ok jailShellApp && ok piApp then
                 pkgs.runCommand "apps-shape" { } ''
-                  echo "apps.${system}.{claude,jail-shell} wired" > $out
+                  echo "apps.${system}.{claude,jail-shell,pi} wired" > $out
                 ''
               else
-                throw "apps.${system}.{claude,jail-shell} missing or wrong shape";
+                throw "apps.${system}.{claude,jail-shell,pi} missing or wrong shape";
 
             # Slice 18.2: zero-touch apps build the jail with a
             # __SLOP_ENV_PROJECT_NAME__ sentinel in cfgDir paths. The
@@ -441,6 +461,39 @@
                   exit 1
                 fi
                 echo "ok" > $out
+              '';
+
+            # Same zero-touch placeholder guarantee for apps.${system}.pi
+            # (ADR-0009): the pi profile bakes the sentinel into its per-project
+            # session/scratch/exchange bind paths and the pi wrapper
+            # sed-substitutes it at invocation.
+            apps-pi-jail-has-placeholder =
+              let
+                slop = self.lib.slopEnv pkgs;
+                piBins = slop.mkBins { agent = slop.profiles.pi; };
+              in
+              pkgs.runCommand "apps-pi-jail-has-placeholder" { } ''
+                if ! grep -q "__SLOP_ENV_PROJECT_NAME__" ${piBins.jailedAgent}/bin/jailed-pi; then
+                  echo "expected __SLOP_ENV_PROJECT_NAME__ placeholder in jailed-pi launch script" >&2
+                  exit 1
+                fi
+                echo "ok" > $out
+              '';
+
+            # Scratch + Exchange parity for the pi launchers: TMPDIR + the pi
+            # exchange dir must be exported and forwarded through the sandboxed
+            # wrapper so the jail re-applies them after `env -i`.
+            apps-pi-scratch-exchange =
+              let
+                slop = self.lib.slopEnv pkgs;
+                piBins = slop.mkBins { agent = slop.profiles.pi; };
+              in
+              pkgs.runCommand "apps-pi-scratch-exchange" { } ''
+                if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e PI_EXCHANGE_DIR' ${piBins.agent}/bin/pi; then
+                  echo "FAIL: pi launcher does not forward TMPDIR + PI_EXCHANGE_DIR through sandboxed" >&2
+                  exit 1
+                fi
+                echo "pi Scratch + Exchange forwarded on the pi launcher" > $out
               '';
             # Slice 18.6: lib/slop-env/defaults/ and the template's
             # claude-config/ are intentionally duplicated (one is library-
@@ -718,7 +771,11 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          bins = (self.lib.slopEnv pkgs).mkBins { };
+          slop = self.lib.slopEnv pkgs;
+          bins = slop.mkBins { };
+          # Zero-touch pi entry: placeholder projectName resolved at invocation
+          # (ADR-0009 + the pi profile's placeholder path).
+          piBins = slop.mkBins { agent = slop.profiles.pi; };
         in
         {
           claude = {
@@ -728,6 +785,10 @@
           jail-shell = {
             type = "app";
             program = "${bins.jail-shell}/bin/jail-shell";
+          };
+          pi = {
+            type = "app";
+            program = "${piBins.agent}/bin/pi";
           };
         }
         // (

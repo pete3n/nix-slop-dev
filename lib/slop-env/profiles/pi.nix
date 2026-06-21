@@ -13,10 +13,13 @@
 #     (config.ts ENV_SESSION_DIR) pointed at a per-project state dir.
 #   - Pi loads ~/.pi/agent/AGENTS.md as global context (resource-loader.ts).
 #
-# Scope: greenfield template only — a concrete projectName is required (no
-# zero-touch apps.${system}.pi path, so no placeholder/sed machinery). Both
-# Linux (bwrap) and Darwin (Seatbelt) are supported; the combinator list is
-# shared between them (mkPiCombinators) so they cannot drift.
+# Supports both the greenfield template (concrete projectName) and the
+# zero-touch apps.${system}.pi entry point (projectName left as the placeholder,
+# resolved at invocation — sed-substituted into the bwrap launcher on Linux,
+# forwarded via NIX_SLOP_DEV_PROJECT_NAME to the per-jail wrapper on Darwin,
+# mirroring the engine's Claude path). Both Linux (bwrap) and Darwin (Seatbelt)
+# are supported; the combinator list is shared (mkPiCombinators) so they cannot
+# drift, and the concrete path stays byte-identical to its template baseline.
 
 let
   hosts = "--allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32";
@@ -166,11 +169,6 @@ let
     mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
   '';
 
-  requireConcrete = projectName: placeholder:
-    if projectName == placeholder then
-      throw "pi-agent: a concrete projectName is required (no zero-touch apps.\${system}.pi path yet)"
-    else
-      null;
 in
 {
   name = "pi";
@@ -200,7 +198,7 @@ in
     }:
     let
       inherit (engine) pkgs lib jail sandboxed prereqGuidance projectNamePlaceholder;
-      _concrete = requireConcrete projectName projectNamePlaceholder;
+      usesPlaceholder = projectName == projectNamePlaceholder;
 
       piCombinators = mkPiCombinators {
         jailC = jail.combinators;
@@ -214,7 +212,29 @@ in
       jailedShell = jail "jailed-shell" pkgs.bashInteractive piCombinators;
       sandboxedPackages = [ sandboxed ];
 
+      # Concrete (template) preamble — projectName baked at eval time.
       preamble = preambleOf projectName;
+
+      # Zero-touch (apps) preamble — resolve PROJECT_NAME at invocation and
+      # sed-substitute the placeholder out of the bwrap launcher's baked
+      # per-project bind paths. Mirrors the engine's Claude Linux path; the sed
+      # is anchored on /projects/ so it only rewrites the session/scratch/
+      # exchange bind destinations, never ~/.pi/agent write-text sources.
+      placeholderPreamble = jailBinary: ''
+        PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
+        PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
+        export PI_CODING_AGENT_SESSION_DIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/sessions"
+        export TMPDIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/tmp"
+        export PI_EXCHANGE_DIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/exchange"
+        export PI_SKIP_VERSION_CHECK=1
+        mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
+        SLOP_LAUNCH_DIR=$(${pkgs.coreutils}/bin/mktemp -d -t slop-env.XXXXXX)
+        trap '${pkgs.coreutils}/bin/rm -rf "$SLOP_LAUNCH_DIR"' EXIT
+        SLOP_LAUNCHER="$SLOP_LAUNCH_DIR/${baseNameOf jailBinary}"
+        ${pkgs.gnused}/bin/sed "s|/projects/${projectNamePlaceholder}|/projects/$PROJECT_NAME|g" \
+          ${jailBinary} > "$SLOP_LAUNCHER"
+        ${pkgs.coreutils}/bin/chmod +x "$SLOP_LAUNCHER"
+      '';
 
       sandboxedInvocation = jailBin: ''
         _pi_extra_e=""
@@ -225,19 +245,33 @@ in
           ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- ${jailBin} "$@"
       '';
 
-      pi = pkgs.writeShellScriptBin "pi" ''
-        set -euo pipefail
-        ${preamble}
-        ${sandboxedInvocation "${jailedPi}/bin/jailed-pi"}
-      '';
+      pi = pkgs.writeShellScriptBin "pi" (
+        if usesPlaceholder then ''
+          set -euo pipefail
+          ${placeholderPreamble "${jailedPi}/bin/jailed-pi"}
+          ${sandboxedInvocation ''"$SLOP_LAUNCHER"''}
+        '' else ''
+          set -euo pipefail
+          ${preamble}
+          ${sandboxedInvocation "${jailedPi}/bin/jailed-pi"}
+        ''
+      );
 
-      jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
-        set -euo pipefail
-        ${preamble}
-        exec ${sandboxed}/bin/sandboxed -q \
-          -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
-          ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- ${jailedShell}/bin/jailed-shell "$@"
-      '';
+      jail-shell = pkgs.writeShellScriptBin "jail-shell" (
+        if usesPlaceholder then ''
+          set -euo pipefail
+          ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
+          exec ${sandboxed}/bin/sandboxed -q \
+            -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+        '' else ''
+          set -euo pipefail
+          ${preamble}
+          exec ${sandboxed}/bin/sandboxed -q \
+            -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
+            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- ${jailedShell}/bin/jailed-shell "$@"
+        ''
+      );
 
       localShellHook = lib.optionalString enableLocalAi ''
         pi-local() {
@@ -310,7 +344,7 @@ in
     }:
     let
       inherit (engine) pkgs lib jail sandboxed projectNamePlaceholder;
-      _concrete = requireConcrete projectName projectNamePlaceholder;
+      usesPlaceholder = projectName == projectNamePlaceholder;
 
       jailC = jail.combinators;
 
@@ -350,13 +384,28 @@ in
       };
       sandboxedPackages = [ sandboxedPi sandboxedShell ];
 
-      preamble = preambleOf projectName;
+      # Concrete (template) vs zero-touch (apps) config setup. On Darwin the
+      # per-jail wrapper does the SBPL projectName substitution itself, so the
+      # placeholder launcher only resolves PROJECT_NAME and forwards it via
+      # NIX_SLOP_DEV_PROJECT_NAME (mirroring the engine's Claude Darwin path) —
+      # no sed in the launcher.
+      placeholderPreamble = ''
+        PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
+        PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
+        export NIX_SLOP_DEV_PROJECT_NAME="$PROJECT_NAME"
+        export PI_CODING_AGENT_SESSION_DIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/sessions"
+        export TMPDIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/tmp"
+        export PI_EXCHANGE_DIR="$HOME/.local/state/pi/projects/$PROJECT_NAME/exchange"
+        export PI_SKIP_VERSION_CHECK=1
+        mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
+      '';
+      configDirSetup = if usesPlaceholder then placeholderPreamble else preambleOf projectName;
 
       # sandbox-exec passes the exported parent env through (no `env -i`), so
       # the -e flags below mirror the Linux forwards for parity.
       pi = pkgs.writeShellScriptBin "pi" ''
         set -euo pipefail
-        ${preamble}
+        ${configDirSetup}
         _pi_extra_e=""
         [ -n "''${ANTHROPIC_API_KEY:-}" ] && _pi_extra_e="-e ANTHROPIC_API_KEY"
         exec ${sandboxedPi}/bin/sandboxed-jailed-pi -q ${hosts} \
@@ -366,7 +415,7 @@ in
 
       jail-shell = pkgs.writeShellScriptBin "jail-shell" ''
         set -euo pipefail
-        ${preamble}
+        ${configDirSetup}
         exec ${sandboxedShell}/bin/sandboxed-jailed-shell -q \
           -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK "$@"
       '';
@@ -381,7 +430,7 @@ in
 
       shellHook = ''
         # Per-project state (sessions/scratch/exchange); ~/.pi/agent is global.
-        ${preamble}
+        ${configDirSetup}
 
         _setup_ok=1
         if [ ! -s "$HOME/.pi/agent/auth.json" ]; then
