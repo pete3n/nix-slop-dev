@@ -63,7 +63,7 @@ nix flake check -L
 nix build -L .#functionalTests.x86_64-linux.sandbox        # network boundary (#1/#2/#3 + wl persistence)
 nix build -L .#functionalTests.x86_64-linux.wl-live-update # --wl-add live-updates a RUNNING sandbox unit
 nix build -L .#functionalTests.x86_64-linux.jail           # filesystem boundary (#4/#5/#6)
-nix build -L .#functionalTests.x86_64-linux.template       # both exported templates' jails
+nix build -L .#functionalTests.x86_64-linux.template       # all exported templates' jails (claude, nvim, pi, opencode)
 
 # Functional / distros — boots a real cloud-image VM (needs /dev/kvm + network).
 bash ci/distro-e2e.sh fedora     # or debian | ubuntu

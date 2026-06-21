@@ -71,6 +71,21 @@ let
       rulesDir = ../templates/pi-agent/slop-env/pi-config/rules;
       skillsDir = ../templates/pi-agent/slop-env/pi-config/skills;
     }).jailedShell;
+
+  # opencode template: config args from templates/opencode/flake.nix, selecting
+  # the opencode Agent Profile (ADR-0010). projectPkgs is omitted here —
+  # hunk/worktrunk presence rides in via the byte-eq drv check; this arm asserts
+  # the universal jail invariants for opencode's combinator list (global state
+  # binds + parent-bound Scratch/Exchange, all via try- binds so no pre-seeded
+  # sources are required).
+  opencodeTemplate =
+    (mkBins {
+      projectName = "tmpl-opencode";
+      agent = (self.lib.slopEnv pkgs).profiles.opencode;
+      agentMdFile = ../templates/opencode/slop-env/opencode-config/AGENTS.md;
+      rulesDir = ../templates/opencode/slop-env/opencode-config/rules;
+      skillsDir = ../templates/opencode/slop-env/opencode-config/skills;
+    }).jailedShell;
 in
 pkgs.testers.runNixOSTest {
   name = "slop-template-functional";
@@ -117,6 +132,9 @@ pkgs.testers.runNixOSTest {
 
     # pi-agent template jail: same universal invariants for the pi profile.
     template_jail("${piTemplate}/bin/jailed-shell", "/home/agent/proj-pi")
+
+    # opencode template jail: same universal invariants for the opencode profile.
+    template_jail("${opencodeTemplate}/bin/jailed-shell", "/home/agent/proj-opencode")
 
     # nvim-dev template jail: same invariants, plus its lua tooling + headless
     # test plumbing must be present on the jail PATH.

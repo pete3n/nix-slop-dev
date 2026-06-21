@@ -174,8 +174,12 @@ Available templates:
   Claude Code, with an `enableLocalAi` toggle for a local ollama provider.
   Same Sandbox / Jail guarantees; see [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
   for the Agent Profile abstraction behind it.
+- `opencode` — Slop Env preconfigured for opencode
+  ([sst/opencode](https://github.com/sst/opencode)) instead of Claude Code,
+  with an `enableLocalAi` toggle for a local ollama provider. Same Sandbox /
+  Jail guarantees; see [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)
+  for the zero-touch divergence behind it.
 
-An additional template (`opencode`) is planned — see [Roadmap](#roadmap).
 Customisation recipes for combinators, project packages, and env-var
 forwarding live in [docs/usage.md](docs/usage.md).
 
@@ -275,13 +279,8 @@ Setup walkthrough: [docs/non-nixos-linux.md](docs/non-nixos-linux.md).
 
 ## Roadmap
 
-Planned work, not yet implemented:
-
-- **`opencode` template** — Slop Env preconfigured for
-  [opencode](https://github.com/sst/opencode) instead of Claude Code, so
-  teams running a different agent get the same Sandbox / Jail guarantees.
-
-The skeleton exists at `templates/opencode/` but is not exported from the
-flake yet. (The `pi-agent` template has shipped — see
-[Templates](#templates).) Track progress via repo issues; contributions
-welcome.
+The originally-planned multi-agent templates have shipped: `pi-agent`
+([ADR-0009](docs/adr/0009-agent-profile-generalization.md)) and `opencode`
+([ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)), both
+delivering the same Sandbox / Jail guarantees as the default Claude Code
+template. Track further work via repo issues; contributions welcome.

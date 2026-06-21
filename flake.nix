@@ -245,6 +245,32 @@
                 echo "ok" > $out
               '';
 
+            # Darwin parallel for apps.${system}.opencode (ADR-0010). opencode
+            # has NO placeholder (the parent ~/.local/state/opencode rw bind +
+            # launcher mkdir replace the per-project sed), so — unlike the
+            # claude/pi Darwin checks — this asserts the Scratch/Exchange forward
+            # on the Darwin opencode launcher and the ABSENCE of the sentinel in
+            # the per-jail wrapper.
+            apps-opencode-darwin-scratch-exchange =
+              let
+                slop = self.lib.slopEnv pkgs;
+                ocBins = slop.mkBins { agent = slop.profiles.opencode; };
+                sandboxedOcWrapper = builtins.head ocBins.sandboxedPackages;
+              in
+              pkgs.runCommand "apps-opencode-darwin-scratch-exchange" { } ''
+                if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e OPENCODE_EXCHANGE_DIR' \
+                     ${ocBins.agent}/bin/opencode; then
+                  echo "FAIL: darwin opencode launcher does not forward TMPDIR + OPENCODE_EXCHANGE_DIR" >&2
+                  exit 1
+                fi
+                if ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' \
+                     ${sandboxedOcWrapper}/bin/sandboxed-jailed-opencode; then
+                  echo "FAIL: sandboxed-jailed-opencode wrapper contains __SLOP_ENV_PROJECT_NAME__ — ADR-0010 says it must not" >&2
+                  exit 1
+                fi
+                echo "ok" > $out
+              '';
+
             lib-slop-env-shape =
               if slopActual == slopExpected then
                 pkgs.runCommand "lib-slop-env-shape" { } ''
@@ -434,14 +460,15 @@
                 claudeApp = self.apps.${system}.claude or null;
                 jailShellApp = self.apps.${system}.jail-shell or null;
                 piApp = self.apps.${system}.pi or null;
+                opencodeApp = self.apps.${system}.opencode or null;
                 ok = app: app != null && (app.type or null) == "app" && (app.program or null) != null;
               in
-              if ok claudeApp && ok jailShellApp && ok piApp then
+              if ok claudeApp && ok jailShellApp && ok piApp && ok opencodeApp then
                 pkgs.runCommand "apps-shape" { } ''
-                  echo "apps.${system}.{claude,jail-shell,pi} wired" > $out
+                  echo "apps.${system}.{claude,jail-shell,pi,opencode} wired" > $out
                 ''
               else
-                throw "apps.${system}.{claude,jail-shell,pi} missing or wrong shape";
+                throw "apps.${system}.{claude,jail-shell,pi,opencode} missing or wrong shape";
 
             # Slice 18.2: zero-touch apps build the jail with a
             # __SLOP_ENV_PROJECT_NAME__ sentinel in cfgDir paths. The
@@ -495,6 +522,30 @@
                 fi
                 echo "pi Scratch + Exchange forwarded on the pi launcher" > $out
               '';
+
+            # Zero-touch opencode (ADR-0010): Scratch (TMPDIR) + Exchange
+            # (OPENCODE_EXCHANGE_DIR) must be exported and forwarded through the
+            # sandboxed wrapper so the jail re-applies them after `env -i`. The
+            # inverse of apps-pi-jail-has-placeholder: opencode binds the parent
+            # ~/.local/state/opencode rw and resolves the per-project subdir in
+            # the launcher, so the launch script must carry NO
+            # __SLOP_ENV_PROJECT_NAME__ sentinel — that is the ADR-0010 guarantee.
+            apps-opencode-scratch-exchange =
+              let
+                slop = self.lib.slopEnv pkgs;
+                ocBins = slop.mkBins { agent = slop.profiles.opencode; };
+              in
+              pkgs.runCommand "apps-opencode-scratch-exchange" { } ''
+                if ! ${pkgs.gnugrep}/bin/grep -qF -- '-e TMPDIR -e OPENCODE_EXCHANGE_DIR' ${ocBins.agent}/bin/opencode; then
+                  echo "FAIL: opencode launcher does not forward TMPDIR + OPENCODE_EXCHANGE_DIR through sandboxed" >&2
+                  exit 1
+                fi
+                if ${pkgs.gnugrep}/bin/grep -q '__SLOP_ENV_PROJECT_NAME__' ${ocBins.agent}/bin/opencode; then
+                  echo "FAIL: opencode launcher contains __SLOP_ENV_PROJECT_NAME__ — ADR-0010 says it must not (no placeholder/sed)" >&2
+                  exit 1
+                fi
+                echo "opencode Scratch + Exchange forwarded; no placeholder in launcher (ADR-0010)" > $out
+              '';
             # Slice 18.6: lib/slop-env/defaults/ and the template's
             # claude-config/ are intentionally duplicated (one is library-
             # lifecycle, one is project-lifecycle). This check fails when
@@ -504,21 +555,22 @@
               inherit pkgs;
             };
 
-            # ADR-0006 consequence: the roadmap skeleton (opencode) stays
-            # UN-EXPORTED (absent from the flake `templates` output) and STILL
-            # PARSES, until it is promoted to a real template. A cheap eval
-            # guard so a skeleton can neither rot into a parse error unnoticed
-            # nor be shipped before it is ready. `import` parses the whole file
-            # and returns its builder function; forcing to a lambda
-            # (isFunction) proves it parses without evaluating the heavy body
-            # (which needs inputs/pkgs/makeNix* it is never given here).
-            # pi-agent graduated to a real template (ADR-0009) — see the
-            # `templates` output and tests/template-pi-agent-drv.
+            # ADR-0006 consequence: roadmap skeletons stay UN-EXPORTED (absent
+            # from the flake `templates` output) and STILL PARSE until promoted
+            # to a real template. A cheap eval guard so a skeleton can neither
+            # rot into a parse error unnoticed nor be shipped before it is ready.
+            # `import` parses the whole file and returns its builder function;
+            # forcing to a lambda (isFunction) proves it parses without
+            # evaluating the heavy body.
+            #
+            # Both planned skeletons have now graduated to real templates:
+            # pi-agent (ADR-0009) and opencode (ADR-0010) — see the `templates`
+            # output and tests/template-{pi-agent,opencode}-drv. The set is empty
+            # for now; the guard stays so a future skeleton is covered the moment
+            # it is added here.
             roadmap-skeletons-guarded =
               let
-                skeletons = {
-                  opencode = ./templates/opencode/opencode.nix;
-                };
+                skeletons = { };
                 names = builtins.attrNames skeletons;
                 exportedTemplates = builtins.attrNames self.templates;
                 exported = builtins.filter (name: builtins.elem name exportedTemplates) names;
@@ -678,6 +730,13 @@
                 template-pi-agent-drv = import ./tests/template-pi-agent-drv.nix {
                   inherit self pkgs;
                 };
+
+                # Byte-equality baseline for the opencode template (ADR-0010).
+                # Same pattern as pi-agent. Regenerate the .expected hash on the
+                # first green build (see the test's header comment).
+                template-opencode-drv = import ./tests/template-opencode-drv.nix {
+                  inherit self pkgs;
+                };
               }
             else
               { }
@@ -776,19 +835,31 @@
           # Zero-touch pi entry: placeholder projectName resolved at invocation
           # (ADR-0009 + the pi profile's placeholder path).
           piBins = slop.mkBins { agent = slop.profiles.pi; };
+          # Zero-touch opencode entry: per-project Scratch/Exchange resolved at
+          # invocation WITHOUT the placeholder/sed (ADR-0010 — the opencode
+          # profile's launcher just mkdirs + exports).
+          ocBins = slop.mkBins { agent = slop.profiles.opencode; };
         in
         {
           claude = {
             type = "app";
             program = "${bins.agent}/bin/claude";
+            meta.description = "Zero-touch jailed Claude Code Slop Env for the current project";
           };
           jail-shell = {
             type = "app";
             program = "${bins.jail-shell}/bin/jail-shell";
+            meta.description = "Zero-touch jailed interactive shell with the current project's Slop Env";
           };
           pi = {
             type = "app";
             program = "${piBins.agent}/bin/pi";
+            meta.description = "Zero-touch jailed Pi (earendil-works/pi) Slop Env for the current project";
+          };
+          opencode = {
+            type = "app";
+            program = "${ocBins.agent}/bin/opencode";
+            meta.description = "Zero-touch jailed opencode (sst/opencode) Slop Env for the current project";
           };
         }
         // (
@@ -800,6 +871,7 @@
               setup-linux = {
                 type = "app";
                 program = "${self.packages.${system}.setup-linux}/bin/setup-linux";
+                meta.description = "Diagnose and optionally apply Sandbox/Jail prerequisites on non-NixOS Linux";
               };
             }
           else
@@ -824,6 +896,7 @@
             prereqGuidance = if isDarwin then null else self.packages.${system}.prereq-guidance;
             claude-pkg = llm-agents.packages.${system}.claude-code;
             pi-pkg = llm-agents.packages.${system}.pi;
+            opencode-pkg = llm-agents.packages.${system}.opencode;
             # Linux: jail-nix's __functor (bwrap-based combinators).
             # Darwin: nix-slop-dev's Seatbelt combinator library.
             jail = if isDarwin then self.lib.jail pkgs else jail-nix.lib.init pkgs;
@@ -871,6 +944,11 @@
         pi-agent = {
           path = ./templates/pi-agent;
           description = "Jailed Pi (earendil-works/pi) environment with sandboxed network isolation";
+        };
+
+        opencode = {
+          path = ./templates/opencode;
+          description = "Jailed opencode (sst/opencode) environment with sandboxed network isolation";
         };
       };
     };

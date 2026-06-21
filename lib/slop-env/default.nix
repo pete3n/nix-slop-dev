@@ -3,6 +3,7 @@
 , prereqGuidance ? null
 , claude-pkg
 , pi-pkg
+, opencode-pkg
 , jail
 }:
 
@@ -37,9 +38,11 @@ let
   # via mkShell/mkBins' `agent` arg (e.g. `agent = slop.profiles.pi`).
   claudeProfile = import ./profiles/claude.nix { inherit claude-pkg shared; };
   piProfile = import ./profiles/pi.nix { inherit pi-pkg shared; };
+  opencodeProfile = import ./profiles/opencode.nix { inherit opencode-pkg shared; };
   profiles = {
     claude = claudeProfile;
     pi = piProfile;
+    opencode = opencodeProfile;
   };
 
   perOs =
