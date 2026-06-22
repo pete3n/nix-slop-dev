@@ -95,14 +95,16 @@ pkgs.testers.runNixOSTest {
     agent.execute(
         "su - agent -c 'timeout 120 ${opencodeBoot} > /tmp/boot-opencode.log 2>&1'"
     )
-    log = agent.succeed("cat /tmp/boot-opencode.log || true")
-    print("---------- opencode boot log ----------\n" + log + "\n---------------------------------------")
+    # NB: `log` is a reserved driver global (the AbstractLogger) — shadowing it
+    # makes the type checker treat this str as AbstractLogger, so use boot_log.
+    boot_log = agent.succeed("cat /tmp/boot-opencode.log || true")
+    print("---------- opencode boot log ----------\n" + boot_log + "\n---------------------------------------")
 
-    # Substring match (not re) — the nixosTest driver type-checks the script and
-    # re.search's stub overloads trip it up. "err_" stands in for opencode's
-    # err_<hex> ref; "loadInstanceState" only appears in its boot error stack.
+    # Substring match (not re) over the denial markers. "err_" stands in for
+    # opencode's err_<hex> ref; "loadInstanceState" only appears in its boot
+    # error stack.
     denials = ["EPERM", "EACCES", "PlatformError", "loadInstanceState", "err_"]
-    hit = [marker for marker in denials if marker in log]
-    assert not hit, f"opencode boot hit a config-dir write-denial inside the jail {hit}:\n{log}"
+    hit = [marker for marker in denials if marker in boot_log]
+    assert not hit, f"opencode boot hit a config-dir write-denial inside the jail {hit}:\n{boot_log}"
   '';
 }
