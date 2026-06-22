@@ -31,8 +31,9 @@
 }:
 let
   render = import ./render.nix { inherit lib; };
-  sbplTemplate = pkgs.writeText "sandbox-profile.sbpl.tmpl"
-    (render.combinedSbplTemplate { inherit jail; });
+  sbplTemplate = pkgs.writeText "sandbox-profile.sbpl.tmpl" (
+    render.combinedSbplTemplate { inherit jail; }
+  );
 in
 pkgs.writeShellScriptBin binName # bash
   ''
@@ -342,11 +343,16 @@ pkgs.writeShellScriptBin binName # bash
     # them). In jail mode the binary name is baked in at Nix-eval (the
     # wrapper is per-jail) so `$1` is no longer the command — it's an
     # argument to mainBin.
-    ${if jail != null && jail ? jailData then ''
-      binary="${baseNameOf jail.jailData.mainBin}"
-    '' else ''
-      binary="$(${pkgs.coreutils}/bin/basename "$1")"
-    ''}stamp="$(${pkgs.coreutils}/bin/date '+%Y%m%d-%H%M%S')"
+    ${
+      if jail != null && jail ? jailData then
+        ''
+          binary="${baseNameOf jail.jailData.mainBin}"
+        ''
+      else
+        ''
+          binary="$(${pkgs.coreutils}/bin/basename "$1")"
+        ''
+    }stamp="$(${pkgs.coreutils}/bin/date '+%Y%m%d-%H%M%S')"
     audit_key="sandbox-''${binary}-''${stamp}"
 
     # Build per-invocation whitelist file: persistent entries + -a hosts.
@@ -408,22 +414,26 @@ pkgs.writeShellScriptBin binName # bash
     # PWD under /tmp. $HOME is forwarded verbatim because macOS home
     # directories never live under /tmp, /var, or /etc.
     profile_file="''${tmp_dir}/sandbox.sbpl"
-    ${lib.optionalString (jail != null && jail ? jailData) ''
-      _jail_cwd="$(${pkgs.coreutils}/bin/realpath "$PWD")"
-      # Linux-parity project-name resolution (slice-21 follow-up). The
-      # caller (lib/slop-env/darwin.nix's claude/jail-shell launchers)
-      # exports NIX_SLOP_DEV_PROJECT_NAME when in zero-touch app mode;
-      # we fall back to the cwd basename so a bare `sandboxed-jailed-*`
-      # invocation outside the launcher still produces a sane path.
-      # Sanitiser mirrors Linux's placeholderPreamble — keep alnum and
-      # ._- so the basename can't smuggle sed delimiters into the
-      # substitution.
-      _project_name="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
-      _project_name="''${_project_name//[^A-Za-z0-9._-]/_}"
-    ''}${render.mkHostResolveResolutionBlock {
-      inherit jail;
-      readlinkBin = "${pkgs.coreutils}/bin/readlink";
-    }}${pkgs.gnused}/bin/sed ${render.mkProfileSedPipeline { inherit jail; }} \
+    ${
+      lib.optionalString (jail != null && jail ? jailData) ''
+        _jail_cwd="$(${pkgs.coreutils}/bin/realpath "$PWD")"
+        # Linux-parity project-name resolution (slice-21 follow-up). The
+        # caller (lib/slop-env/darwin.nix's claude/jail-shell launchers)
+        # exports NIX_SLOP_DEV_PROJECT_NAME when in zero-touch app mode;
+        # we fall back to the cwd basename so a bare `sandboxed-jailed-*`
+        # invocation outside the launcher still produces a sane path.
+        # Sanitiser mirrors Linux's placeholderPreamble — keep alnum and
+        # ._- so the basename can't smuggle sed delimiters into the
+        # substitution.
+        _project_name="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
+        _project_name="''${_project_name//[^A-Za-z0-9._-]/_}"
+      ''
+    }${
+      render.mkHostResolveResolutionBlock {
+        inherit jail;
+        readlinkBin = "${pkgs.coreutils}/bin/readlink";
+      }
+    }${pkgs.gnused}/bin/sed ${render.mkProfileSedPipeline { inherit jail; }} \
     	"$sbpl_template" > "$profile_file"
 
     if [ "$quiet" -eq 0 ]; then

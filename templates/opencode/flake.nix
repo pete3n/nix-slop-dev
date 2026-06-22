@@ -32,18 +32,11 @@
         {
           default =
             let
-              # hunk and worktrunk are re-exported by nix-slop-dev (ADR-0007 /
-              # ADR-0008), so this flake needs no inputs of its own for them.
               hunk = nix-slop-dev.packages.${system}.hunk;
               worktrunk = nix-slop-dev.packages.${system}.worktrunk;
 
               # Merge the checked-in skills with hunk's packaged review skill
               # into one bundle, then bind that as the opencode skills dir.
-              # Binding hunk-review *under* the read-only skills mount at runtime
-              # would fail (bwrap can't create a mountpoint inside a read-only
-              # bind); merging at build time keeps the skill version-locked to
-              # the installed hunk. opencode scans {skill,skills}/**/SKILL.md
-              # from ~/.config/opencode/skills.
               skills = pkgs.runCommand "opencode-skills" { } ''
                 mkdir -p "$out"
                 cp -r ${./slop-env/opencode-config/skills}/. "$out/"
@@ -64,9 +57,7 @@
 
               # hunk in projectPkgs reaches BOTH the jail (so the agent can
               # drive a review with `hunk session …`) and this dev shell (so
-              # you can watch the `hunk diff` TUI in another terminal). See
-              # ADR-0007. worktrunk rides alongside it so `wt` is on both the
-              # jail and dev-shell PATH for parallel worktree workflows.
+              # you can watch the `hunk diff` TUI in another terminal).
               projectPkgs = [
                 hunk
                 worktrunk

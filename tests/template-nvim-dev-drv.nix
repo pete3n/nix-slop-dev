@@ -1,9 +1,10 @@
-{ self
-, pkgs
-, jail-nix
-, llm-agents
-, flake-utils
-, gen-luarc
+{
+  self,
+  pkgs,
+  jail-nix,
+  llm-agents,
+  flake-utils,
+  gen-luarc,
 }:
 
 # Byte-equality regression check for slice 19 (ADR-0005, issue draft 19).
@@ -21,7 +22,12 @@ let
   outs = template.outputs {
     nixpkgs = self.inputs.nixpkgs;
     nix-slop-dev = self;
-    inherit jail-nix llm-agents flake-utils gen-luarc;
+    inherit
+      jail-nix
+      llm-agents
+      flake-utils
+      gen-luarc
+      ;
   };
   actualDrv = baseNameOf outs.devShells.x86_64-linux.default.drvPath;
   expectedDrv = pkgs.lib.fileContents ./template-nvim-dev-drv.expected;

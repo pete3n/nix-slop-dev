@@ -22,11 +22,12 @@ let
   # `__JAIL_HOST_RESOLVE_ETC_BASHRC__` → `etc_bashrc`. Used by both the
   # sed-pipeline emission and the resolution block so the variable
   # names line up across the two render sites.
-  hostResolveKey = entry:
+  hostResolveKey =
+    entry:
     let
-      mid = lib.removeSuffix "__"
-        (lib.removePrefix "__JAIL_HOST_RESOLVE_" entry.placeholder);
-    in lib.toLower mid;
+      mid = lib.removeSuffix "__" (lib.removePrefix "__JAIL_HOST_RESOLVE_" entry.placeholder);
+    in
+    lib.toLower mid;
 
   # Slice-21 follow-up: rewrite the project-name placeholder inside
   # bash snippets emitted by the jail's preflight/cleanup combinators
@@ -36,17 +37,18 @@ let
   # store names embed the placeholder as `-projects-PLACEHOLDER-`
   # (dash-separated) and must NOT be rewritten or `ln -sfn` would
   # point at a non-existent store path.
-  rewriteProjectNamePlaceholder = lib.replaceStrings
-    [ "/projects/__SLOP_ENV_PROJECT_NAME__" ]
-    [ "/projects/\${_project_name}" ];
+  rewriteProjectNamePlaceholder =
+    lib.replaceStrings
+      [ "/projects/__SLOP_ENV_PROJECT_NAME__" ]
+      [ "/projects/\${_project_name}" ];
 in
 {
-  combinedSbplTemplate = { jail ? null }:
+  combinedSbplTemplate =
+    {
+      jail ? null,
+    }:
     profile.mkSandboxProfileTemplate {
-      jailFragment =
-        if jail != null && jail ? jailData
-        then jail.jailData.sbpl
-        else "";
+      jailFragment = if jail != null && jail ? jailData then jail.jailData.sbpl else "";
     };
 
   # Emits the `-e <expr>` arguments the wrapper passes to sed for runtime
@@ -76,12 +78,14 @@ in
   # empty the block is the empty string — no trailing newline, no header
   # comment — so the wrapper script stays byte-for-byte identical to the
   # pre-issue-11 shape in that mode.
-  mkPreflightBlock = { jail ? null }:
-    if jail != null && jail ? jailData && jail.jailData.preflight != [ ]
-    then lib.concatMapStrings
-      (line: rewriteProjectNamePlaceholder line + "\n")
-      jail.jailData.preflight
-    else "";
+  mkPreflightBlock =
+    {
+      jail ? null,
+    }:
+    if jail != null && jail ? jailData && jail.jailData.preflight != [ ] then
+      lib.concatMapStrings (line: rewriteProjectNamePlaceholder line + "\n") jail.jailData.preflight
+    else
+      "";
 
   # Concatenates `jailData.cleanup` snippets in REVERSE order (LIFO via
   # trap, per the lib/jail contract — each combinator that materialised a
@@ -94,12 +98,16 @@ in
   # The wrapper interpolates this block into its `_cleanup` trap body
   # (after the sandbox-exec child is killed, before the proxy + tmpdir
   # are torn down). Same empty-string contract as mkPreflightBlock.
-  mkCleanupBlock = { jail ? null }:
-    if jail != null && jail ? jailData && jail.jailData.cleanup != [ ]
-    then lib.concatMapStrings
-      (line: rewriteProjectNamePlaceholder line + "\n")
-      (lib.reverseList jail.jailData.cleanup)
-    else "";
+  mkCleanupBlock =
+    {
+      jail ? null,
+    }:
+    if jail != null && jail ? jailData && jail.jailData.cleanup != [ ] then
+      lib.concatMapStrings (line: rewriteProjectNamePlaceholder line + "\n") (
+        lib.reverseList jail.jailData.cleanup
+      )
+    else
+      "";
 
   # Renders the bash block that extends `_env_args` with the jail's env
   # contributions: `jailData.env` becomes unconditional `_env_args+=("K=v")`
@@ -112,13 +120,15 @@ in
   #
   # Empty in network-only mode and when the jail's env + envForward are
   # both empty (jails of just SBPL combinators like time-zone / ro-bind).
-  mkJailEnvBlock = { jail ? null }:
+  mkJailEnvBlock =
+    {
+      jail ? null,
+    }:
     let
       hasJail = jail != null && jail ? jailData;
-      envLines = lib.optionals hasJail
-        (lib.mapAttrsToList
-          (key: value: ''_env_args+=("${key}=${value}")'')
-          jail.jailData.env);
+      envLines = lib.optionals hasJail (
+        lib.mapAttrsToList (key: value: ''_env_args+=("${key}=${value}")'') jail.jailData.env
+      );
       fwdNames = if hasJail then jail.jailData.envForward else [ ];
       fwdLoop = lib.optionalString (fwdNames != [ ]) ''
         for _jail_fwd_var in ${lib.concatStringsSep " " fwdNames}; do
@@ -129,7 +139,8 @@ in
         done
       '';
       envBlock = lib.concatMapStrings (line: line + "\n") envLines;
-    in envBlock + fwdLoop;
+    in
+    envBlock + fwdLoop;
 
   # Returns the colon-joined+terminated prefix the wrapper splices into
   # the PATH entry of `_env_args`. Each `add-pkg-deps` invocation in the
@@ -137,10 +148,14 @@ in
   # them (vs appending) means jail-provided binaries shadow whatever the
   # wrapper inherited from $PATH, which is what add-pkg-deps users expect
   # (lib/jail slice 8 documents this contract).
-  mkJailPathPrefix = { jail ? null }:
-    if jail != null && jail ? jailData && jail.jailData.binPaths != [ ]
-    then (lib.concatStringsSep ":" jail.jailData.binPaths) + ":"
-    else "";
+  mkJailPathPrefix =
+    {
+      jail ? null,
+    }:
+    if jail != null && jail ? jailData && jail.jailData.binPaths != [ ] then
+      (lib.concatStringsSep ":" jail.jailData.binPaths) + ":"
+    else
+      "";
 
   # The command portion of the final `sandbox-exec ... env -i ... <cmd>`
   # invocation. In jail mode this is `<mainBin> "$@"` — the wrapper is
@@ -148,10 +163,11 @@ in
   # carries only the user's runtime arguments. In network-only mode the
   # user supplies the command as the first positional, so the helper
   # returns the bare `"$@"` (preserving the pre-issue-11 contract).
-  mkExecCommand = { jail ? null }:
-    if jail != null && jail ? jailData
-    then ''"${jail.jailData.mainBin}" "$@"''
-    else ''"$@"'';
+  mkExecCommand =
+    {
+      jail ? null,
+    }:
+    if jail != null && jail ? jailData then ''"${jail.jailData.mainBin}" "$@"'' else ''"$@"'';
 
   # Emits the bash block that resolves each hostResolve entry's path
   # before the SBPL sed pipeline runs. One line per entry of the form:
@@ -178,20 +194,26 @@ in
   # itself documents for that resolution. On stock macOS (no symlink) it
   # returns the path unchanged — the allow becomes redundant with the
   # prelude literal but is harmless.
-  mkHostResolveResolutionBlock = { jail ? null, readlinkBin }:
+  mkHostResolveResolutionBlock =
+    {
+      jail ? null,
+      readlinkBin,
+    }:
     let
-      hasEntries = jail != null
-        && jail ? jailData
-        && (jail.jailData.hostResolve or [ ]) != [ ];
-      mkLine = entry:
-        let key = hostResolveKey entry;
-        in ''_jail_hr_${key}="$(${readlinkBin} -f '${entry.path}' 2>/dev/null || echo '/__jail_host_resolve_no_match_${key}__')"'';
+      hasEntries = jail != null && jail ? jailData && (jail.jailData.hostResolve or [ ]) != [ ];
+      mkLine =
+        entry:
+        let
+          key = hostResolveKey entry;
+        in
+        ''_jail_hr_${key}="$(${readlinkBin} -f '${entry.path}' 2>/dev/null || echo '/__jail_host_resolve_no_match_${key}__')"'';
     in
-      if hasEntries
-      then lib.concatMapStrings (e: mkLine e + "\n") jail.jailData.hostResolve
-      else "";
+    if hasEntries then lib.concatMapStrings (e: mkLine e + "\n") jail.jailData.hostResolve else "";
 
-  mkProfileSedPipeline = { jail ? null }:
+  mkProfileSedPipeline =
+    {
+      jail ? null,
+    }:
     let
       proxyPortSub = ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'';
       hasJail = jail != null && jail ? jailData;
@@ -207,11 +229,15 @@ in
         # commit 4c3b2a6.
         ''-e "s|/projects/__SLOP_ENV_PROJECT_NAME__|/projects/''${_project_name}|g"''
       ];
-      hostResolveSubs = lib.optionals hasJail
-        (map (entry:
-          let key = hostResolveKey entry;
-          in ''-e "s|${entry.placeholder}|''${_jail_hr_${key}}|g"'')
-          (jail.jailData.hostResolve or [ ]));
-    in lib.concatStringsSep " "
-      ([ proxyPortSub ] ++ staticJailSubs ++ hostResolveSubs);
+      hostResolveSubs = lib.optionals hasJail (
+        map (
+          entry:
+          let
+            key = hostResolveKey entry;
+          in
+          ''-e "s|${entry.placeholder}|''${_jail_hr_${key}}|g"''
+        ) (jail.jailData.hostResolve or [ ])
+      );
+    in
+    lib.concatStringsSep " " ([ proxyPortSub ] ++ staticJailSubs ++ hostResolveSubs);
 }

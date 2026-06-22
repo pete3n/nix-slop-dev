@@ -57,8 +57,12 @@ let
         apiKey = "ollama";
       };
       models = {
-        "qwen3-coder:latest" = { name = "Qwen3 Coder (Local)"; };
-        "gemma3:latest" = { name = "Gemma3 (Local)"; };
+        "qwen3-coder:latest" = {
+          name = "Qwen3 Coder (Local)";
+        };
+        "gemma3:latest" = {
+          name = "Gemma3 (Local)";
+        };
       };
     };
   };
@@ -75,15 +79,25 @@ let
     };
   };
 
-  settingsFor = enableLocalAi:
+  settingsFor =
+    enableLocalAi:
     opencodeSettings
-    // (if enableLocalAi then {
-      provider = opencodeLocalProvider;
-      agent = opencodeLocalAgent;
-    } else { });
+    // (
+      if enableLocalAi then
+        {
+          provider = opencodeLocalProvider;
+          agent = opencodeLocalAgent;
+        }
+      else
+        { }
+    );
 
-  contextOf = { agentMdFile, rulesDir }:
-    shared.mkContextMd { contextMdFile = agentMdFile; inherit rulesDir; };
+  contextOf =
+    { agentMdFile, rulesDir }:
+    shared.mkContextMd {
+      contextMdFile = agentMdFile;
+      inherit rulesDir;
+    };
 
   # Shared jail combinator list. `jailC` is jail.combinators; `envSrc` is the
   # /usr/bin/env source (coreutils on Linux, the SIP path on Darwin); `extra`
@@ -96,19 +110,20 @@ let
   # jail launch script is byte-identical regardless of projectName, and carries
   # no __SLOP_ENV_PROJECT_NAME__ sentinel.
   mkOpencodeCombinators =
-    { jailC
-    , lib
-    , pkgs
-    , envSrc
-    , extra ? [ ]
-    , skillsDir
-    , agentMdFile
-    , rulesDir
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
+    {
+      jailC,
+      lib,
+      pkgs,
+      envSrc,
+      extra ? [ ],
+      skillsDir,
+      agentMdFile,
+      rulesDir,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
     }:
     let
       contextMd = contextOf { inherit agentMdFile rulesDir; };
@@ -135,7 +150,9 @@ let
       # Config (ro): opencode.json + AGENTS.md injected from the store.
       # ~/.config/opencode is otherwise read-only — opencode reads it, never
       # writes there.
-      (write-text (noescape "~/.config/opencode/opencode.json") (builtins.toJSON (settingsFor enableLocalAi)))
+      (write-text (noescape "~/.config/opencode/opencode.json") (
+        builtins.toJSON (settingsFor enableLocalAi)
+      ))
       (write-text (noescape "~/.config/opencode/AGENTS.md") contextMd)
 
       # Optional API-key auth; auth.json (`opencode auth login`) takes priority
@@ -188,27 +205,45 @@ in
 
   # --- Linux (bwrap) builder ---
   mkLinuxBins =
-    { projectName
-    , rulesDir
-    , skillsDir
-    , agentMdFile
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
-    , extraShellHook
-    , extraSandboxedEnvForwards
-    , engine
+    {
+      projectName,
+      rulesDir,
+      skillsDir,
+      agentMdFile,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
+      extraShellHook,
+      extraSandboxedEnvForwards,
+      engine,
     }:
     let
-      inherit (engine) pkgs lib jail sandboxed prereqGuidance projectNamePlaceholder;
+      inherit (engine)
+        pkgs
+        lib
+        jail
+        sandboxed
+        prereqGuidance
+        projectNamePlaceholder
+        ;
       usesPlaceholder = projectName == projectNamePlaceholder;
 
       ocCombinators = mkOpencodeCombinators {
         jailC = jail.combinators;
-        inherit lib pkgs skillsDir agentMdFile rulesDir enableLocalAi
-          basePkgs projectPkgs projectEnv extraCombinators;
+        inherit
+          lib
+          pkgs
+          skillsDir
+          agentMdFile
+          rulesDir
+          enableLocalAi
+          basePkgs
+          projectPkgs
+          projectEnv
+          extraCombinators
+          ;
         envSrc = "${pkgs.coreutils}/bin/env";
         extra = [ ];
       };
@@ -227,7 +262,8 @@ in
       resolvePreamble = ''
         PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
         PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
-      '' + preambleBody "$PROJECT_NAME";
+      ''
+      + preambleBody "$PROJECT_NAME";
 
       preamble = if usesPlaceholder then resolvePreamble else concretePreamble;
 
@@ -267,42 +303,50 @@ in
       '';
 
       shellHook = # sh
-        ''
-          # Per-project Scratch/Exchange; opencode's own state is global.
-          ${preamble}
+      ''
+        # Per-project Scratch/Exchange; opencode's own state is global.
+        ${preamble}
 
-          # Setup checks
-          _setup_ok=1
-          ${prereqGuidance}/bin/slop-prereq-guidance || _setup_ok=0
+        # Setup checks
+        _setup_ok=1
+        ${prereqGuidance}/bin/slop-prereq-guidance || _setup_ok=0
 
-          if [ ! -s "$HOME/.local/share/opencode/auth.json" ] && [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
-          	printf '\033[1;36mℹ opencode credentials not found.\033[0m\n'
-          	printf '  Run opencode and use /login (or export ANTHROPIC_API_KEY) on first use.\n\n'
-          	_setup_ok=0
-          fi
+        if [ ! -s "$HOME/.local/share/opencode/auth.json" ] && [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
+        	printf '\033[1;36mℹ opencode credentials not found.\033[0m\n'
+        	printf '  Run opencode and use /login (or export ANTHROPIC_API_KEY) on first use.\n\n'
+        	_setup_ok=0
+        fi
 
-          if [ "$_setup_ok" -eq 1 ]; then
-          	printf '\033[1;32m✓\033[0m Jailed opencode ready. Run \033[1mopencode\033[0m to start.\n'
-          fi
-          printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
+        if [ "$_setup_ok" -eq 1 ]; then
+        	printf '\033[1;32m✓\033[0m Jailed opencode ready. Run \033[1mopencode\033[0m to start.\n'
+        fi
+        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${
+          lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
+        }
 
-          # Jailed opencode
-          opencode() {
-          	${preamble}
-          	_oc_extra_e=""
-          	[ -n "''${ANTHROPIC_API_KEY:-}" ] && _oc_extra_e="-e ANTHROPIC_API_KEY"
-          	${sandboxed}/bin/sandboxed -q ${hosts} \
-          		-e TMPDIR -e OPENCODE_EXCHANGE_DIR \
-          		$_oc_extra_e ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}\
-          		${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-opencode "$@"
-          }
-          alias jail-shell="${sandboxed}/bin/sandboxed -q -e TMPDIR -e OPENCODE_EXCHANGE_DIR -- ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-shell"
-        '' + localShellHook;
+        # Jailed opencode
+        opencode() {
+        	${preamble}
+        	_oc_extra_e=""
+        	[ -n "''${ANTHROPIC_API_KEY:-}" ] && _oc_extra_e="-e ANTHROPIC_API_KEY"
+        	${sandboxed}/bin/sandboxed -q ${hosts} \
+        		-e TMPDIR -e OPENCODE_EXCHANGE_DIR \
+        		$_oc_extra_e ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}\
+        		${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-opencode "$@"
+        }
+        alias jail-shell="${sandboxed}/bin/sandboxed -q -e TMPDIR -e OPENCODE_EXCHANGE_DIR -- ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-shell"
+      ''
+      + localShellHook;
     in
     {
       agent = opencode;
       jailedAgent = jailedOpencode;
-      inherit jail-shell jailedShell sandboxedPackages shellHook;
+      inherit
+        jail-shell
+        jailedShell
+        sandboxedPackages
+        shellHook
+        ;
     };
 
   # --- Darwin (Seatbelt) builder ---
@@ -313,21 +357,28 @@ in
   # substitution, so the per-jail wrapper is byte-identical regardless of
   # projectName and the launcher just mkdirs + exports.
   mkDarwinBins =
-    { projectName
-    , rulesDir
-    , skillsDir
-    , agentMdFile
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
-    , extraShellHook
-    , extraSandboxedEnvForwards
-    , engine
+    {
+      projectName,
+      rulesDir,
+      skillsDir,
+      agentMdFile,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
+      extraShellHook,
+      extraSandboxedEnvForwards,
+      engine,
     }:
     let
-      inherit (engine) pkgs lib jail sandboxed projectNamePlaceholder;
+      inherit (engine)
+        pkgs
+        lib
+        jail
+        sandboxed
+        projectNamePlaceholder
+        ;
       usesPlaceholder = projectName == projectNamePlaceholder;
 
       jailC = jail.combinators;
@@ -342,8 +393,19 @@ in
       ];
 
       ocCombinators = mkOpencodeCombinators {
-        inherit jailC lib pkgs skillsDir agentMdFile rulesDir enableLocalAi
-          basePkgs projectPkgs projectEnv extraCombinators;
+        inherit
+          jailC
+          lib
+          pkgs
+          skillsDir
+          agentMdFile
+          rulesDir
+          enableLocalAi
+          basePkgs
+          projectPkgs
+          projectEnv
+          extraCombinators
+          ;
         # SIP keeps /usr/bin read-only; src == dst so the read-allow emits with
         # no bind preflight.
         envSrc = "/usr/bin/env";
@@ -362,7 +424,10 @@ in
         jail = jailedShell;
         binName = "sandboxed-jailed-shell";
       };
-      sandboxedPackages = [ sandboxedOpencode sandboxedShell ];
+      sandboxedPackages = [
+        sandboxedOpencode
+        sandboxedShell
+      ];
 
       # ADR-0010: no NIX_SLOP_DEV_PROJECT_NAME forwarding (the wrapper has no
       # SBPL projectName substitution to feed). Concrete bakes the name;
@@ -370,7 +435,8 @@ in
       resolvePreamble = ''
         PROJECT_NAME="''${NIX_SLOP_DEV_PROJECT_NAME:-$(${pkgs.coreutils}/bin/basename "$PWD")}"
         PROJECT_NAME="''${PROJECT_NAME//[^A-Za-z0-9._-]/_}"
-      '' + preambleBody "$PROJECT_NAME";
+      ''
+      + preambleBody "$PROJECT_NAME";
       preamble = if usesPlaceholder then resolvePreamble else preambleBody projectName;
 
       # sandbox-exec passes the exported parent env through (no `env -i`), so the
@@ -415,12 +481,20 @@ in
         if [ "$_setup_ok" -eq 1 ]; then
         	printf '\033[1;32m✓\033[0m Jailed opencode ready. Run \033[1mopencode\033[0m to start.\n'
         fi
-        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
-      '' + localShellHook;
+        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${
+          lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
+        }
+      ''
+      + localShellHook;
     in
     {
       agent = opencode;
       jailedAgent = jailedOpencode;
-      inherit jail-shell jailedShell sandboxedPackages shellHook;
+      inherit
+        jail-shell
+        jailedShell
+        sandboxedPackages
+        shellHook
+        ;
     };
 }

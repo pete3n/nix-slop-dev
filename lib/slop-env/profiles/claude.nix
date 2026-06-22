@@ -25,8 +25,12 @@
   # Always-in-context instructions file (base file + rules/*). `agentMdFile` is
   # the profile-neutral caller arg; for Claude it is the CLAUDE.md the agent
   # loads from its config dir.
-  mkContext = { agentMdFile, rulesDir }:
-    shared.mkContextMd { contextMdFile = agentMdFile; inherit rulesDir; };
+  mkContext =
+    { agentMdFile, rulesDir }:
+    shared.mkContextMd {
+      contextMdFile = agentMdFile;
+      inherit rulesDir;
+    };
 
   # Claude's jail combinator builder: cfgDir, config injection, per-project rw
   # state, the shared-credentials graft, caches, and env forwards. The OS arms

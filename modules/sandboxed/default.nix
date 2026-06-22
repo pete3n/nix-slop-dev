@@ -1,5 +1,10 @@
 flake:
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.security.sandboxed;
 in

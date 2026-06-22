@@ -22,17 +22,22 @@
 # boundary stands on its own.
 { lib }:
 let
-  buildProfile = { portToken, jailFragment }:
+  buildProfile =
+    { portToken, jailFragment }:
     ''
       (version 1)
       (allow default)
       (deny network-outbound)
       (allow network-outbound (remote ip "localhost:${portToken}"))
-    '' + jailFragment;
+    ''
+    + jailFragment;
 in
 {
   mkSandboxProfile =
-    { proxyPort, jailFragment ? "" }:
+    {
+      proxyPort,
+      jailFragment ? "",
+    }:
     let
       validPort = lib.isInt proxyPort && proxyPort >= 1 && proxyPort <= 65535;
     in
@@ -44,7 +49,10 @@ in
     };
 
   mkSandboxProfileTemplate =
-    { portPlaceholder ? "__PROXYPORT__", jailFragment ? "" }:
+    {
+      portPlaceholder ? "__PROXYPORT__",
+      jailFragment ? "",
+    }:
     let
       validPlaceholder = lib.isString portPlaceholder && portPlaceholder != "";
     in

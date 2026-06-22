@@ -66,6 +66,32 @@ macOS adds a small read-only set for shell startup:
 present), plus `/usr/bin/security` (read + exec) so Claude Code can
 read its OAuth token from the macOS Keychain.
 
+### Scratch and Exchange
+
+A Jail hides `/tmp` and the bulk of `$HOME`, so the agent's own temp lives
+in its mount namespace and is unreachable from the host. Every Slop Env —
+apps and templates, both platforms — therefore provisions two host-visible
+per-project directories and points the agent at them via env vars:
+
+| Dir | Env var | Purpose |
+|---|---|---|
+| **Scratch** | `$TMPDIR` (all agents) | Throwaway temp + intermediate files. Host-visible for inspection; treat as disposable. |
+| **Exchange** | `CLAUDE_EXCHANGE_DIR` / `OPENCODE_EXCHANGE_DIR` / `PI_EXCHANGE_DIR` | Deliberate two-way handoff: you drop inputs in, the agent leaves outputs (e.g. handoff docs). Persists across runs. |
+
+The env-var name is Agent-Profile-specific because each upstream agent has
+its own convention; the directories themselves are uniform. Both sit under
+the agent's per-project state root and are scoped per `projectName`:
+
+| Agent | Scratch (`$TMPDIR`) | Exchange |
+|---|---|---|
+| Claude Code | `~/.local/state/claude/projects/<projectName>/tmp` | `~/.local/state/claude/projects/<projectName>/exchange` |
+| opencode | `~/.local/state/opencode/projects/<projectName>/tmp` | `~/.local/state/opencode/projects/<projectName>/exchange` |
+| Pi | `~/.local/state/pi/projects/<projectName>/tmp` | `~/.local/state/pi/projects/<projectName>/exchange` |
+
+The `shellHook` prints the Exchange path on entry. On Linux these are
+`tmpfs`-backed where the per-project state dir is; on macOS they are
+persistent host dirs.
+
 ### Network
 
 By default the Sandbox is deny-all outbound. Hosts allowed come from
@@ -93,6 +119,13 @@ matrix:
 - `platform.claude.com`
 - `2607:6bc0::/32` (Anthropic's IPv6 prefix; Linux only — the macOS
   proxy filters by hostname, not CIDR)
+
+`nix run …#pi` adds the same three (Pi defaults to the Anthropic
+provider). `nix run …#opencode` adds those three plus `models.dev` (for
+opencode's model catalogue). When a template is built with
+`enableLocalAi = true`, the local launcher talks to ollama on loopback
+(`127.0.0.1:11434`) and adds **no** outbound allows — it runs fully
+offline.
 
 `nix run …#jail-shell` adds **no** per-invocation allows. Only the
 persistent whitelist applies.
@@ -133,8 +166,10 @@ Both `mkBins` and `mkShell` accept the same arguments. The full list:
 
 | Argument | Type | Default | Effect |
 |---|---|---|---|
-| `projectName` | string | `__SLOP_ENV_PROJECT_NAME__` (zero-touch placeholder) | Identifies the per-project state dir (`~/.local/state/claude/projects/<projectName>/`). Templates pass an explicit value; apps resolve it at runtime from `basename "$PWD"`. |
-| `claudeMdFile` | path | `lib/slop-env/defaults/CLAUDE.md` | Base context file concatenated with all `rulesDir/*.md` into the agent's `CLAUDE.md`. |
+| `projectName` | string | `__SLOP_ENV_PROJECT_NAME__` (zero-touch placeholder) | Identifies the per-project state dir (`~/.local/state/<agent>/projects/<projectName>/`). Templates pass an explicit value; apps resolve it at runtime from `basename "$PWD"`. |
+| `agent` | Agent Profile | `profiles.claude` | Which coding agent the Slop Env confines. Pass `slop.profiles.pi` or `slop.profiles.opencode` to select Pi or opencode instead of Claude Code (ADR-0009 / ADR-0010). Each profile carries its own config layout, credential/session locations, provider hosts, and Exchange env-var name. |
+| `enableLocalAi` | bool | `false` | (Pi and opencode profiles) Add a local ollama provider to the Slop Env. No-op for the Claude profile. |
+| `agentMdFile` | path | `lib/slop-env/defaults/CLAUDE.md` | Base context file concatenated with all `rulesDir/*.md` into the agent's context file (Claude loads it as `CLAUDE.md`, Pi as `AGENTS.md`; the profile decides). |
 | `rulesDir` | path | `lib/slop-env/defaults/rules` | Directory of `.md` rule files concatenated onto `CLAUDE.md` at jail build time. |
 | `skillsDir` | path or `null` | `null` | Directory of agent skills ([Matt Pocock format](https://github.com/mattpocock/skills/blob/main/README.md)) bind-mounted at `~/.local/state/claude/projects/<projectName>/skills/`. |
 | `basePkgs` | list of packages | `shared.defaultBasePkgs` | The base toolbox added to the Jail's `add-pkg-deps` combinator. Replace to slim or extend the default. |
@@ -160,14 +195,16 @@ template combines several of them and is worth reading as a working example.
 ```nix
 devShells.${system}.default = slop.mkShell {
   projectName = "my-project";
-  claudeMdFile = ./slop-env/claude-config/CLAUDE.md;
+  agentMdFile = ./slop-env/claude-config/CLAUDE.md;
   rulesDir = ./slop-env/claude-config/rules;
   skillsDir = ./slop-env/claude-config/skills;
 
-  projectPkgs = with pkgs; [
-    lua-language-server
-    stylua
-    nodejs_20
+  projectPkgs = [
+    hunk
+    worktrunk
+    pkgs.lua-language-server
+    pkgs.stylua
+    pkgs.nodejs_20
   ];
 };
 ```
@@ -175,6 +212,12 @@ devShells.${system}.default = slop.mkShell {
 The named packages are added to the Jail's `add-pkg-deps` combinator
 (their full `/nix/store` closure bind-mounted read-only) and to the
 outer dev-shell's `packages`.
+
+Each shipped template already sets `projectPkgs = [ hunk worktrunk ]` (the
+`hunk` diff-review tool and the `wt` worktree-workflow CLI, both re-exported
+by nix-slop-dev), so they reach both the dev shell and the jailed agent.
+Append your own rather than dropping them, e.g.
+`projectPkgs = [ hunk worktrunk pkgs.nodejs_20 ];`.
 
 ### Set project env vars
 

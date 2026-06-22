@@ -92,7 +92,7 @@ let
     lua-language-server
     nixfmt
     nixd
-		tree-sitter
+    tree-sitter
   ];
 in
 {
@@ -111,7 +111,7 @@ in
     inherit extraPackages;
     appName = "nvim-dev";
     wrapRc = false;
-		withPython3 = false;
+    withPython3 = false;
   };
 
   # This can be symlinked in the devShell's shellHook

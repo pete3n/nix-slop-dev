@@ -5,7 +5,12 @@
 # root, so the Linux module's sudoers / auditd / cgroup-delegation
 # machinery has no counterpart on macOS — it is deliberately absent.
 flake:
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.security.sandboxed;
 in

@@ -1,7 +1,8 @@
-{ self
-, pkgs
-, jail-nix
-, llm-agents
+{
+  self,
+  pkgs,
+  jail-nix,
+  llm-agents,
 }:
 
 # Byte-equality regression check for slice 17 (ADR-0005). Pins the

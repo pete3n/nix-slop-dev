@@ -1,5 +1,6 @@
-{ self
-, pkgs
+{
+  self,
+  pkgs,
 }:
 
 # Byte-equality regression check for the opencode template (ADR-0010). Pins the

@@ -1,5 +1,6 @@
-{ self
-, pkgs
+{
+  self,
+  pkgs,
 }:
 
 # Byte-equality regression check for the pi-agent template (ADR-0009). Pins the

@@ -13,8 +13,30 @@
 { pkgs, lib }:
 let
   jailLib = import ../lib/jail { inherit lib pkgs; };
-  inherit (jailLib) emptySlice mergeSlices combinators prelude jail;
-  inherit (combinators) set-env time-zone network no-new-session ro-bind rw-bind mount-cwd noescape tmpfs ensure-dir write-text try-readwrite try-fwd-env add-pkg-deps host-resolve;
+  inherit (jailLib)
+    emptySlice
+    mergeSlices
+    combinators
+    prelude
+    jail
+    ;
+  inherit (combinators)
+    set-env
+    time-zone
+    network
+    no-new-session
+    ro-bind
+    rw-bind
+    mount-cwd
+    noescape
+    tmpfs
+    ensure-dir
+    write-text
+    try-readwrite
+    try-fwd-env
+    add-pkg-deps
+    host-resolve
+    ;
 
   tests = {
     # Slice 1 tracer: set-env is the simplest combinator. No SBPL emission
@@ -23,21 +45,33 @@ let
     # constructor hands to /usr/bin/env -i at exec time.
     testSetEnvProducesEnvEntry = {
       expr = (set-env "FOO" "bar").env;
-      expected = { FOO = "bar"; };
+      expected = {
+        FOO = "bar";
+      };
     };
 
     # Anti-test: set-env must not bleed into the other slice fields, or it
     # would silently emit junk SBPL when callers compose combinators.
     testSetEnvLeavesOtherSliceFieldsEmpty = {
-      expr = let slice = set-env "FOO" "bar"; in {
-        inherit (slice) sbpl preflight cleanup envForward binPaths;
-      };
+      expr =
+        let
+          slice = set-env "FOO" "bar";
+        in
+        {
+          inherit (slice)
+            sbpl
+            preflight
+            cleanup
+            envForward
+            binPaths
+            ;
+        };
       expected = {
         sbpl = "";
-        preflight = [];
-        cleanup = [];
-        envForward = [];
-        binPaths = [];
+        preflight = [ ];
+        cleanup = [ ];
+        envForward = [ ];
+        binPaths = [ ];
       };
     };
 
@@ -46,22 +80,35 @@ let
     # the jail constructor will do over the user's combinator list.
     testMergeSlicesCombinesEnvEntries = {
       expr = (mergeSlices (set-env "A" "1") (set-env "B" "2")).env;
-      expected = { A = "1"; B = "2"; };
+      expected = {
+        A = "1";
+        B = "2";
+      };
     };
 
     # Anti-test: merging two slices that contribute only env must leave
     # the other slice fields empty. Catches a merge implementation that
     # accidentally concatenates "" + "" into something non-empty.
     testMergeSlicesPreservesEmptyShape = {
-      expr = let merged = mergeSlices (set-env "A" "1") (set-env "B" "2"); in {
-        inherit (merged) sbpl preflight cleanup envForward binPaths;
-      };
+      expr =
+        let
+          merged = mergeSlices (set-env "A" "1") (set-env "B" "2");
+        in
+        {
+          inherit (merged)
+            sbpl
+            preflight
+            cleanup
+            envForward
+            binPaths
+            ;
+        };
       expected = {
         sbpl = "";
-        preflight = [];
-        cleanup = [];
-        envForward = [];
-        binPaths = [];
+        preflight = [ ];
+        cleanup = [ ];
+        envForward = [ ];
+        binPaths = [ ];
       };
     };
 
@@ -135,9 +182,13 @@ let
     # look for it, so the combinator's whole job is the SBPL allow.
     # Preflight stays empty: nothing to materialise.
     testRoBindSamePathEmitsReadAllowNoPreflight = {
-      expr = let slice = ro-bind "/nix/store/abc/foo" "/nix/store/abc/foo"; in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = ro-bind "/nix/store/abc/foo" "/nix/store/abc/foo";
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       # Issue 15: ro-bind pairs file-read* with process-exec on the same
       # canonical subpath, matching Linux bwrap's bind-mount semantics
       # (binding a dir into the jail makes its contents readable AND
@@ -148,7 +199,7 @@ let
           (allow file-read* (subpath "/nix/store/abc/foo"))
           (allow process-exec (subpath "/nix/store/abc/foo"))
         '';
-        preflight = [];
+        preflight = [ ];
       };
     };
 
@@ -244,9 +295,13 @@ let
     # parameter-expanded shell quoting (`"$path"`) so paths with spaces
     # survive; SBPL escaping is independent (already exercised above).
     testRoBindDifferentPathEmitsSymlinkPreflight = {
-      expr = let slice = ro-bind "/nix/store/abc/env" "/usr/local/bin/env"; in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = ro-bind "/nix/store/abc/env" "/usr/local/bin/env";
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/env"))
@@ -264,9 +319,13 @@ let
     # is symmetric with read — transitive over subdirectories, last-
     # match-wins for narrowing. Same-path case emits no preflight.
     testRwBindSamePathEmitsReadAndWriteAllow = {
-      expr = let slice = rw-bind "/Users/x/work" "/Users/x/work"; in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = rw-bind "/Users/x/work" "/Users/x/work";
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       # Issue 15: rw-bind tacks process-exec onto the read+write pair on
       # the same canonical subpath. Matches Linux bwrap's bind-mount
       # semantics — a writable bind is also exec'able (the typical case
@@ -277,7 +336,7 @@ let
           (allow file-write* (subpath "/Users/x/work"))
           (allow process-exec (subpath "/Users/x/work"))
         '';
-        preflight = [];
+        preflight = [ ];
       };
     };
 
@@ -289,9 +348,13 @@ let
     # ro-bind would emit no symlink here and the jailed process would
     # fail to open dst at all.
     testRwBindDifferentPathEmitsBothAllowsAndPreflight = {
-      expr = let slice = rw-bind "/nix/store/abc/share" "/Users/x/share"; in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = rw-bind "/nix/store/abc/share" "/Users/x/share";
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/share"))
@@ -337,14 +400,20 @@ let
     # widen the slice surface. Catch the regression here.
     testMountCwdLeavesOtherSliceFieldsEmpty = {
       expr = {
-        inherit (mount-cwd) preflight cleanup env envForward binPaths;
+        inherit (mount-cwd)
+          preflight
+          cleanup
+          env
+          envForward
+          binPaths
+          ;
       };
       expected = {
-        preflight = [];
-        cleanup = [];
-        env = {};
-        envForward = [];
-        binPaths = [];
+        preflight = [ ];
+        cleanup = [ ];
+        env = { };
+        envForward = [ ];
+        binPaths = [ ];
       };
     };
 
@@ -356,7 +425,9 @@ let
     # work identically on macOS without API changes.
     testNoEscapeReturnsTaggedRecord = {
       expr = noescape "~/.cache";
-      expected = { _noescape = "~/.cache"; };
+      expected = {
+        _noescape = "~/.cache";
+      };
     };
 
     # Slice 5: when a bind combinator receives a noescape-wrapped path
@@ -367,15 +438,19 @@ let
     # /var, /etc prefixes match). Same-noescape-value src/dst means no
     # preflight (bindPreflight compares the underlying strings).
     testRoBindNoEscapeSamePathEmitsHomePlaceholder = {
-      expr = let slice = ro-bind (noescape "~/.cache") (noescape "~/.cache"); in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = ro-bind (noescape "~/.cache") (noescape "~/.cache");
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.cache"))
           (allow process-exec (subpath "__JAIL_HOME__/.cache"))
         '';
-        preflight = [];
+        preflight = [ ];
       };
     };
 
@@ -388,9 +463,13 @@ let
     # because bash, not sandbox-exec, runs the snippet; `$HOME`
     # expands inside the surrounding "..." quotes.
     testRoBindMixedSrcPlainDstNoEscapeEmitsHomeShellExpansion = {
-      expr = let slice = ro-bind "/nix/store/abc/cfg" (noescape "~/.config/foo"); in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = ro-bind "/nix/store/abc/cfg" (noescape "~/.config/foo");
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/nix/store/abc/cfg"))
@@ -411,9 +490,13 @@ let
     #   (2) skipping the write allow because the src already has a
     #       read allow.
     testRwBindNoEscapeBothEmitsReadWriteAllowsAndShellPreflight = {
-      expr = let slice = rw-bind (noescape "~/.shared/creds") (noescape "~/.jail/creds"); in {
-        inherit (slice) sbpl preflight;
-      };
+      expr =
+        let
+          slice = rw-bind (noescape "~/.shared/creds") (noescape "~/.jail/creds");
+        in
+        {
+          inherit (slice) sbpl preflight;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.shared/creds"))
@@ -454,9 +537,13 @@ let
     # Preflight + cleanup use renderShellPath so /tmp -> /private/tmp
     # canonicalization happens for free; SBPL uses renderSbplPath.
     testTmpfsEmitsMkdirPreflightRmCleanupAndReadWriteSbpl = {
-      expr = let slice = tmpfs "/Users/x/scratch"; in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = tmpfs "/Users/x/scratch";
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       # Issue 15: tmpfs adds process-exec on the same canonical subpath
       # as its read/write pair. The ephemeral directory holds whatever
       # the agent or its tools materialise — including binaries built or
@@ -482,9 +569,13 @@ let
     # we'd `rm -rf "__JAIL_HOME__/..."` (which bash treats as a
     # literal directory name — silent no-op cleanup, files persist).
     testTmpfsNoEscapeUsesHomeInShellAndPlaceholderInSbpl = {
-      expr = let slice = tmpfs (noescape "~/.config/claude-code-jailed"); in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = tmpfs (noescape "~/.config/claude-code-jailed");
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.config/claude-code-jailed"))
@@ -506,9 +597,13 @@ let
     # Linux callers stay on tmpfs (jail-nix's namespace-local tmpfs
     # already gives the right semantics).
     testEnsureDirEmitsMkdirPreflightAndReadWriteSbplWithoutCleanup = {
-      expr = let slice = ensure-dir "/Users/x/persistent"; in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = ensure-dir "/Users/x/persistent";
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "/Users/x/persistent"))
@@ -529,9 +624,13 @@ let
     # rm-rf `__JAIL_HOME__/...` literally — silent no-op, file would
     # persist but be in the wrong place).
     testEnsureDirNoEscapeUsesHomeInShellAndPlaceholderInSbpl = {
-      expr = let slice = ensure-dir (noescape "~/.local/state/claude/projects/test"); in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = ensure-dir (noescape "~/.local/state/claude/projects/test");
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOME__/.local/state/claude/projects/test"))
@@ -550,13 +649,19 @@ let
     # tmpfs's full preflight+cleanup pair. Catches a regression where
     # mergeSlices forgets to concat one of the new fields.
     testMergeSlicesConcatenatesCleanup = {
-      expr = let merged = mergeSlices (tmpfs "/x") (set-env "K" "v"); in {
-        inherit (merged) preflight cleanup env;
-      };
+      expr =
+        let
+          merged = mergeSlices (tmpfs "/x") (set-env "K" "v");
+        in
+        {
+          inherit (merged) preflight cleanup env;
+        };
       expected = {
         preflight = [ ''mkdir -p "/x"'' ];
         cleanup = [ ''rm -rf "/x"'' ];
-        env = { K = "v"; };
+        env = {
+          K = "v";
+        };
       };
     };
 
@@ -576,11 +681,13 @@ let
     # by design — the name is part of the wire contract for hash
     # stability across rebuilds.
     testWriteTextEmitsSymlinkPreflightAndStoreLiteralAllow = {
-      expr = let
-        slice = write-text "/Users/x/cfg.json" ''{"key":"value"}'';
-      in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = write-text "/Users/x/cfg.json" ''{"key":"value"}'';
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       # Issue 15: write-text pairs its file-read* (literal storePath)
       # allow with a process-exec (literal storePath) allow on the same
       # store path. Used for in-jail executable scripts (e.g. wrapper
@@ -588,16 +695,18 @@ let
       # the kernel rejects exec'ing the resolved store target. literal,
       # not subpath, because spike 10 F4: literal is exact-file (matches
       # the single-file write-text contract, narrower than subpath).
-      expected = let
-        storePath = builtins.toFile "jail-write-text" ''{"key":"value"}'';
-      in {
-        sbpl = ''
-          (allow file-read* (literal "${storePath}"))
-          (allow process-exec (literal "${storePath}"))
-        '';
-        preflight = [ ''mkdir -p "/Users/x" && ln -sfn "${storePath}" "/Users/x/cfg.json"'' ];
-        cleanup = [ ''rm -f "/Users/x/cfg.json"'' ];
-      };
+      expected =
+        let
+          storePath = builtins.toFile "jail-write-text" ''{"key":"value"}'';
+        in
+        {
+          sbpl = ''
+            (allow file-read* (literal "${storePath}"))
+            (allow process-exec (literal "${storePath}"))
+          '';
+          preflight = [ ''mkdir -p "/Users/x" && ln -sfn "${storePath}" "/Users/x/cfg.json"'' ];
+          cleanup = [ ''rm -f "/Users/x/cfg.json"'' ];
+        };
     };
 
     # The actual template pattern:
@@ -610,23 +719,27 @@ let
     # (literal directory name in bash) — silent no-op rm, symlink
     # persists, tmpfs ephemerality breaks.
     testWriteTextNoEscapeUsesHomeInShellPreflightAndCleanup = {
-      expr = let
-        slice = write-text (noescape "~/.config/claude-code-jailed/settings.json") ''{"theme":"dark"}'';
-      in {
-        inherit (slice) sbpl preflight cleanup;
-      };
-      expected = let
-        storePath = builtins.toFile "jail-write-text" ''{"theme":"dark"}'';
-      in {
-        sbpl = ''
-          (allow file-read* (literal "${storePath}"))
-          (allow process-exec (literal "${storePath}"))
-        '';
-        preflight = [
-          ''mkdir -p "$HOME/.config/claude-code-jailed" && ln -sfn "${storePath}" "$HOME/.config/claude-code-jailed/settings.json"''
-        ];
-        cleanup = [ ''rm -f "$HOME/.config/claude-code-jailed/settings.json"'' ];
-      };
+      expr =
+        let
+          slice = write-text (noescape "~/.config/claude-code-jailed/settings.json") ''{"theme":"dark"}'';
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
+      expected =
+        let
+          storePath = builtins.toFile "jail-write-text" ''{"theme":"dark"}'';
+        in
+        {
+          sbpl = ''
+            (allow file-read* (literal "${storePath}"))
+            (allow process-exec (literal "${storePath}"))
+          '';
+          preflight = [
+            ''mkdir -p "$HOME/.config/claude-code-jailed" && ln -sfn "${storePath}" "$HOME/.config/claude-code-jailed/settings.json"''
+          ];
+          cleanup = [ ''rm -f "$HOME/.config/claude-code-jailed/settings.json"'' ];
+        };
     };
 
     # Anti-test: two write-text calls with the same content produce
@@ -636,12 +749,13 @@ let
     # to the toFile name (e.g., to make the store name reflect the
     # destination) would break dedup and burn store space.
     testWriteTextSameContentSharesStorePath = {
-      expr = let
-        sliceA = write-text "/Users/a/x" "shared content";
-        sliceB = write-text "/Users/b/y" "shared content";
-        extractStorePath = sbpl:
-          lib.elemAt (lib.match ''.*"(/nix/store/[^"]+)".*'' sbpl) 0;
-      in extractStorePath sliceA.sbpl == extractStorePath sliceB.sbpl;
+      expr =
+        let
+          sliceA = write-text "/Users/a/x" "shared content";
+          sliceB = write-text "/Users/b/y" "shared content";
+          extractStorePath = sbpl: lib.elemAt (lib.match ''.*"(/nix/store/[^"]+)".*'' sbpl) 0;
+        in
+        extractStorePath sliceA.sbpl == extractStorePath sliceB.sbpl;
       expected = true;
     };
 
@@ -653,9 +767,13 @@ let
     # has no path to match against). No preflight or cleanup needed:
     # the path either exists (allow applies) or doesn't (allow is moot).
     testTryReadwriteEmitsReadAndWriteAllowsNoPreflightOrCleanup = {
-      expr = let slice = try-readwrite "/Users/x/cache"; in {
-        inherit (slice) sbpl preflight cleanup;
-      };
+      expr =
+        let
+          slice = try-readwrite "/Users/x/cache";
+        in
+        {
+          inherit (slice) sbpl preflight cleanup;
+        };
       # Issue 15: try-readwrite mirrors rw-bind's process-exec pairing.
       # The unconditional allow (rule applies if path exists, no-ops
       # otherwise) shape is unchanged — the new process-exec line is
@@ -666,8 +784,8 @@ let
           (allow file-write* (subpath "/Users/x/cache"))
           (allow process-exec (subpath "/Users/x/cache"))
         '';
-        preflight = [];
-        cleanup = [];
+        preflight = [ ];
+        cleanup = [ ];
       };
     };
 
@@ -702,15 +820,25 @@ let
     # wrong slice field — would result in either a missing var at
     # runtime (env vs envForward swap) or stray SBPL emission.
     testTryFwdEnvLeavesOtherFieldsEmpty = {
-      expr = let slice = try-fwd-env "FOO"; in {
-        inherit (slice) sbpl preflight cleanup env binPaths;
-      };
+      expr =
+        let
+          slice = try-fwd-env "FOO";
+        in
+        {
+          inherit (slice)
+            sbpl
+            preflight
+            cleanup
+            env
+            binPaths
+            ;
+        };
       expected = {
         sbpl = "";
-        preflight = [];
-        cleanup = [];
-        env = {};
-        binPaths = [];
+        preflight = [ ];
+        cleanup = [ ];
+        env = { };
+        binPaths = [ ];
       };
     };
 
@@ -728,33 +856,42 @@ let
     # pkgs.hello would drag in libSystem etc., making the expected
     # closure non-portable.
     testAddPkgDepsEmitsClosureAllowAndBinPath = {
-      expr = let
-        fakePkg = pkgs.runCommand "jail-test-leaf-pkg" { } ''
-          mkdir -p $out/bin
-          : > $out/bin/leaf
-        '';
-        slice = add-pkg-deps [ fakePkg ];
-      in {
-        inherit (slice) sbpl binPaths preflight cleanup;
-      };
+      expr =
+        let
+          fakePkg = pkgs.runCommand "jail-test-leaf-pkg" { } ''
+            mkdir -p $out/bin
+            : > $out/bin/leaf
+          '';
+          slice = add-pkg-deps [ fakePkg ];
+        in
+        {
+          inherit (slice)
+            sbpl
+            binPaths
+            preflight
+            cleanup
+            ;
+        };
       # Issue 15: every closure member gets a paired file-read* + process-exec
       # allow. The exec allow is on the same canonical subpath as the read,
       # mirroring Linux bwrap's bind-mount semantics (where binding the
       # closure dir makes its binaries both readable AND exec'able).
-      expected = let
-        fakePkg = pkgs.runCommand "jail-test-leaf-pkg" { } ''
-          mkdir -p $out/bin
-          : > $out/bin/leaf
-        '';
-      in {
-        sbpl = ''
-          (allow file-read* (subpath "${fakePkg}"))
-          (allow process-exec (subpath "${fakePkg}"))
-        '';
-        binPaths = [ "${fakePkg}/bin" ];
-        preflight = [];
-        cleanup = [];
-      };
+      expected =
+        let
+          fakePkg = pkgs.runCommand "jail-test-leaf-pkg" { } ''
+            mkdir -p $out/bin
+            : > $out/bin/leaf
+          '';
+        in
+        {
+          sbpl = ''
+            (allow file-read* (subpath "${fakePkg}"))
+            (allow process-exec (subpath "${fakePkg}"))
+          '';
+          binPaths = [ "${fakePkg}/bin" ];
+          preflight = [ ];
+          cleanup = [ ];
+        };
     };
 
     # Empty list: closureInfo over an empty rootPaths returns an empty
@@ -762,14 +899,23 @@ let
     # empty string; binPaths is empty. Anti-test against an impl that
     # short-circuits with a "default" allow on /nix/store or similar.
     testAddPkgDepsEmptyListIsNoOp = {
-      expr = let slice = add-pkg-deps []; in {
-        inherit (slice) sbpl binPaths preflight cleanup;
-      };
+      expr =
+        let
+          slice = add-pkg-deps [ ];
+        in
+        {
+          inherit (slice)
+            sbpl
+            binPaths
+            preflight
+            cleanup
+            ;
+        };
       expected = {
         sbpl = "";
-        binPaths = [];
-        preflight = [];
-        cleanup = [];
+        binPaths = [ ];
+        preflight = [ ];
+        cleanup = [ ];
       };
     };
 
@@ -778,15 +924,25 @@ let
     # SBPL allows can be in any order — last-match-wins on SBPL is
     # safe for allow-only rules — so we only assert binPaths order.
     testAddPkgDepsMultiPkgPreservesBinPathOrder = {
-      expr = let
-        pkgA = pkgs.runCommand "jail-test-pkg-a" { } ''mkdir -p $out/bin; : > $out/bin/a'';
-        pkgB = pkgs.runCommand "jail-test-pkg-b" { } ''mkdir -p $out/bin; : > $out/bin/b'';
-        slice = add-pkg-deps [ pkgA pkgB ];
-      in slice.binPaths;
-      expected = let
-        pkgA = pkgs.runCommand "jail-test-pkg-a" { } ''mkdir -p $out/bin; : > $out/bin/a'';
-        pkgB = pkgs.runCommand "jail-test-pkg-b" { } ''mkdir -p $out/bin; : > $out/bin/b'';
-      in [ "${pkgA}/bin" "${pkgB}/bin" ];
+      expr =
+        let
+          pkgA = pkgs.runCommand "jail-test-pkg-a" { } "mkdir -p $out/bin; : > $out/bin/a";
+          pkgB = pkgs.runCommand "jail-test-pkg-b" { } "mkdir -p $out/bin; : > $out/bin/b";
+          slice = add-pkg-deps [
+            pkgA
+            pkgB
+          ];
+        in
+        slice.binPaths;
+      expected =
+        let
+          pkgA = pkgs.runCommand "jail-test-pkg-a" { } "mkdir -p $out/bin; : > $out/bin/a";
+          pkgB = pkgs.runCommand "jail-test-pkg-b" { } "mkdir -p $out/bin; : > $out/bin/b";
+        in
+        [
+          "${pkgA}/bin"
+          "${pkgB}/bin"
+        ];
     };
 
     # Slice 9 tracer: the jail constructor folds a combinator list and
@@ -798,18 +954,26 @@ let
     # contents (which are themselves load-bearing: any change to the
     # prelude is a security-relevant decision).
     testJailEmptyListIsDenyDefaultPlusPrelude = {
-      expr = let
-        fakePkg = pkgs.runCommand "jail-test-empty-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-empty'';
-      in (jail "jail-test-empty" fakePkg []).jailData.sbpl;
+      expr =
+        let
+          fakePkg =
+            pkgs.runCommand "jail-test-empty-pkg" { }
+              "mkdir -p $out/bin; : > $out/bin/jail-test-empty";
+        in
+        (jail "jail-test-empty" fakePkg [ ]).jailData.sbpl;
       # The jail constructor implicitly adds pkg's closure to the SBPL
       # so mainBin (lib.getExe pkg) is readable — without it sandbox-exec
       # would refuse to launch the jailed binary at all ("Operation not
       # permitted" at exec time, issue 12 HITL surface). The pkg-closure
       # allows sit between prelude and the caller's combinators, so the
       # caller's allows can still override (last-match-wins).
-      expected = let
-        fakePkg = pkgs.runCommand "jail-test-empty-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-empty'';
-      in "(deny default)\n" + prelude + (add-pkg-deps [ fakePkg ]).sbpl;
+      expected =
+        let
+          fakePkg =
+            pkgs.runCommand "jail-test-empty-pkg" { }
+              "mkdir -p $out/bin; : > $out/bin/jail-test-empty";
+        in
+        "(deny default)\n" + prelude + (add-pkg-deps [ fakePkg ]).sbpl;
     };
 
     # Slice 9: combinator-list fold. The SBPL is deny-default + prelude
@@ -820,15 +984,23 @@ let
     # prelude's last line; network's first allow appears AFTER
     # time-zone's last allow.
     testJailFoldsCombinatorSbplInListOrder = {
-      expr = let
-        fakePkg = pkgs.runCommand "jail-test-order-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-order'';
-      in (jail "jail-test-order" fakePkg [ time-zone network ]).jailData.sbpl;
-      expected = let
-        fakePkg = pkgs.runCommand "jail-test-order-pkg" { } ''mkdir -p $out/bin; : > $out/bin/jail-test-order'';
-      in "(deny default)\n" + prelude
-        + (add-pkg-deps [ fakePkg ]).sbpl
-        + time-zone.sbpl
-        + network.sbpl;
+      expr =
+        let
+          fakePkg =
+            pkgs.runCommand "jail-test-order-pkg" { }
+              "mkdir -p $out/bin; : > $out/bin/jail-test-order";
+        in
+        (jail "jail-test-order" fakePkg [
+          time-zone
+          network
+        ]).jailData.sbpl;
+      expected =
+        let
+          fakePkg =
+            pkgs.runCommand "jail-test-order-pkg" { }
+              "mkdir -p $out/bin; : > $out/bin/jail-test-order";
+        in
+        "(deny default)\n" + prelude + (add-pkg-deps [ fakePkg ]).sbpl + time-zone.sbpl + network.sbpl;
     };
 
     # Slice 9: every non-SBPL slice field (preflight, cleanup, env,
@@ -836,31 +1008,37 @@ let
     # jailData. Mixing combinators that each touch a different field
     # so a failure isolates which propagation path is broken.
     testJailPropagatesAllMergedSliceFields = {
-      expr = let
-        leafPkg = pkgs.runCommand "jail-test-leaf-bin" { } ''mkdir -p $out/bin; : > $out/bin/leaf'';
-        binDepPkg = pkgs.runCommand "jail-test-bin-dep" { } ''mkdir -p $out/bin; : > $out/bin/dep'';
-        result = jail "jail-test-fields" leafPkg [
-          (tmpfs "/tmp/jail-test-x")
-          (set-env "JAIL_KEY" "jail-val")
-          (try-fwd-env "JAIL_FWD")
-          (add-pkg-deps [ binDepPkg ])
-        ];
-      in {
-        preflight = result.jailData.preflight;
-        cleanup = result.jailData.cleanup;
-        env = result.jailData.env;
-        envForward = result.jailData.envForward;
-        binPaths = result.jailData.binPaths;
-      };
-      expected = let
-        binDepPkg = pkgs.runCommand "jail-test-bin-dep" { } ''mkdir -p $out/bin; : > $out/bin/dep'';
-      in {
-        preflight = [ ''mkdir -p "/private/tmp/jail-test-x"'' ];
-        cleanup = [ ''rm -rf "/private/tmp/jail-test-x"'' ];
-        env = { JAIL_KEY = "jail-val"; };
-        envForward = [ "JAIL_FWD" ];
-        binPaths = [ "${binDepPkg}/bin" ];
-      };
+      expr =
+        let
+          leafPkg = pkgs.runCommand "jail-test-leaf-bin" { } "mkdir -p $out/bin; : > $out/bin/leaf";
+          binDepPkg = pkgs.runCommand "jail-test-bin-dep" { } "mkdir -p $out/bin; : > $out/bin/dep";
+          result = jail "jail-test-fields" leafPkg [
+            (tmpfs "/tmp/jail-test-x")
+            (set-env "JAIL_KEY" "jail-val")
+            (try-fwd-env "JAIL_FWD")
+            (add-pkg-deps [ binDepPkg ])
+          ];
+        in
+        {
+          preflight = result.jailData.preflight;
+          cleanup = result.jailData.cleanup;
+          env = result.jailData.env;
+          envForward = result.jailData.envForward;
+          binPaths = result.jailData.binPaths;
+        };
+      expected =
+        let
+          binDepPkg = pkgs.runCommand "jail-test-bin-dep" { } "mkdir -p $out/bin; : > $out/bin/dep";
+        in
+        {
+          preflight = [ ''mkdir -p "/private/tmp/jail-test-x"'' ];
+          cleanup = [ ''rm -rf "/private/tmp/jail-test-x"'' ];
+          env = {
+            JAIL_KEY = "jail-val";
+          };
+          envForward = [ "JAIL_FWD" ];
+          binPaths = [ "${binDepPkg}/bin" ];
+        };
     };
 
     # Slice 9: the constructor returns a derivation (via
@@ -880,23 +1058,27 @@ let
     # boilerplate getExe exists to avoid. meta.mainProgram (or pname
     # fallback) is what real pkgs already expose.
     testJailMainBinUsesGetExe = {
-      expr = let
-        leafPkg = pkgs.runCommand "jail-test-drv-pkg"
-          { meta.mainProgram = "leaf-binary"; }
-          ''mkdir -p $out/bin; : > $out/bin/leaf-binary'';
-        result = jail "jail-test-drv" leafPkg [];
-      in {
-        isDerivation = lib.isDerivation result;
-        mainBin = result.jailData.mainBin;
-      };
-      expected = let
-        leafPkg = pkgs.runCommand "jail-test-drv-pkg"
-          { meta.mainProgram = "leaf-binary"; }
-          ''mkdir -p $out/bin; : > $out/bin/leaf-binary'';
-      in {
-        isDerivation = true;
-        mainBin = "${leafPkg}/bin/leaf-binary";
-      };
+      expr =
+        let
+          leafPkg = pkgs.runCommand "jail-test-drv-pkg" {
+            meta.mainProgram = "leaf-binary";
+          } "mkdir -p $out/bin; : > $out/bin/leaf-binary";
+          result = jail "jail-test-drv" leafPkg [ ];
+        in
+        {
+          isDerivation = lib.isDerivation result;
+          mainBin = result.jailData.mainBin;
+        };
+      expected =
+        let
+          leafPkg = pkgs.runCommand "jail-test-drv-pkg" {
+            meta.mainProgram = "leaf-binary";
+          } "mkdir -p $out/bin; : > $out/bin/leaf-binary";
+        in
+        {
+          isDerivation = true;
+          mainBin = "${leafPkg}/bin/leaf-binary";
+        };
     };
 
     # Issue 14 tracer: emptySlice carries a `hostResolve` field — the
@@ -919,13 +1101,40 @@ let
     # Anti-test for a `//` impl that would silently overwrite left's list
     # with right's.
     testMergeSlicesConcatenatesHostResolve = {
-      expr = (mergeSlices
-        (emptySlice // { hostResolve = [ { placeholder = "A"; path = "/a"; } ]; })
-        (emptySlice // { hostResolve = [ { placeholder = "B"; path = "/b"; } ]; })
-      ).hostResolve;
+      expr =
+        (mergeSlices
+          (
+            emptySlice
+            // {
+              hostResolve = [
+                {
+                  placeholder = "A";
+                  path = "/a";
+                }
+              ];
+            }
+          )
+          (
+            emptySlice
+            // {
+              hostResolve = [
+                {
+                  placeholder = "B";
+                  path = "/b";
+                }
+              ];
+            }
+          )
+        ).hostResolve;
       expected = [
-        { placeholder = "A"; path = "/a"; }
-        { placeholder = "B"; path = "/b"; }
+        {
+          placeholder = "A";
+          path = "/a";
+        }
+        {
+          placeholder = "B";
+          path = "/b";
+        }
       ];
     };
 
@@ -940,18 +1149,24 @@ let
     # with `_`, with any leading `_` stripped — predictable and reviewable
     # in the rendered profile (vs. a hash).
     testHostResolveEmitsPlaceholderAndEntry = {
-      expr = let slice = host-resolve "/etc/bashrc"; in {
-        sbpl = slice.sbpl;
-        hostResolve = slice.hostResolve;
-      };
+      expr =
+        let
+          slice = host-resolve "/etc/bashrc";
+        in
+        {
+          sbpl = slice.sbpl;
+          hostResolve = slice.hostResolve;
+        };
       expected = {
         sbpl = ''
           (allow file-read* (subpath "__JAIL_HOST_RESOLVE_ETC_BASHRC__"))
         '';
-        hostResolve = [ {
-          placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
-          path = "/etc/bashrc";
-        } ];
+        hostResolve = [
+          {
+            placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
+            path = "/etc/bashrc";
+          }
+        ];
       };
     };
 
@@ -964,9 +1179,19 @@ let
     # unconditionally; the issue's cross-platform constraint demands the
     # only consumer be the darwin wrapper).
     testHostResolveLeavesOtherSliceFieldsEmpty = {
-      expr = let slice = host-resolve "/etc/bashrc"; in {
-        inherit (slice) preflight cleanup env envForward binPaths;
-      };
+      expr =
+        let
+          slice = host-resolve "/etc/bashrc";
+        in
+        {
+          inherit (slice)
+            preflight
+            cleanup
+            env
+            envForward
+            binPaths
+            ;
+        };
       expected = {
         preflight = [ ];
         cleanup = [ ];
@@ -986,18 +1211,26 @@ let
     # its sed pipeline by iterating this list, and stable order keeps
     # rendered scripts diff-reviewable.
     testJailPropagatesHostResolveThroughJailData = {
-      expr = let
-        leafPkg = pkgs.runCommand "jail-test-host-resolve-pkg" { } ''
-          mkdir -p $out/bin; : > $out/bin/jail-test-host-resolve
-        '';
-        result = jail "jail-test-host-resolve" leafPkg [
-          (host-resolve "/etc/bashrc")
-          (host-resolve "/etc/zshrc")
-        ];
-      in result.jailData.hostResolve;
+      expr =
+        let
+          leafPkg = pkgs.runCommand "jail-test-host-resolve-pkg" { } ''
+            mkdir -p $out/bin; : > $out/bin/jail-test-host-resolve
+          '';
+          result = jail "jail-test-host-resolve" leafPkg [
+            (host-resolve "/etc/bashrc")
+            (host-resolve "/etc/zshrc")
+          ];
+        in
+        result.jailData.hostResolve;
       expected = [
-        { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
-        { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
+        {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
+          path = "/etc/bashrc";
+        }
+        {
+          placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__";
+          path = "/etc/zshrc";
+        }
       ];
     };
 
@@ -1008,18 +1241,24 @@ let
         dashed = (host-resolve "/etc/foo-bar").hostResolve;
       };
       expected = {
-        deep = [ {
-          placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSH_ZSHRC__";
-          path = "/etc/zsh/zshrc";
-        } ];
-        dotted = [ {
-          placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_CONF__";
-          path = "/etc/foo.conf";
-        } ];
-        dashed = [ {
-          placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_BAR__";
-          path = "/etc/foo-bar";
-        } ];
+        deep = [
+          {
+            placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSH_ZSHRC__";
+            path = "/etc/zsh/zshrc";
+          }
+        ];
+        dotted = [
+          {
+            placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_CONF__";
+            path = "/etc/foo.conf";
+          }
+        ];
+        dashed = [
+          {
+            placeholder = "__JAIL_HOST_RESOLVE_ETC_FOO_BAR__";
+            path = "/etc/foo-bar";
+          }
+        ];
       };
     };
 
@@ -1066,11 +1305,13 @@ let
     # alongside their file-read* rules — the prelude must not pre-allow
     # any host-binary exec the way the old `(allow process*)` did.
     testPreludeCarriesNoOtherProcessExecAllows = {
-      expr = let
-        execAllowCount = lib.length (lib.filter
-          (line: lib.hasInfix "process-exec" line)
-          (lib.splitString "\n" prelude));
-      in execAllowCount;
+      expr =
+        let
+          execAllowCount = lib.length (
+            lib.filter (line: lib.hasInfix "process-exec" line) (lib.splitString "\n" prelude)
+          );
+        in
+        execAllowCount;
       expected = 1;
     };
 
@@ -1084,27 +1325,27 @@ let
     # composition, catching any future regression that re-introduces a
     # blanket exec allow somewhere in the assembly pipeline.
     testJailEndToEndProcessExecOnlyEnvAndClosures = {
-      expr = let
-        leafPkg = pkgs.runCommand "jail-test-end-to-end-pkg" { } ''
-          mkdir -p $out/bin; : > $out/bin/jail-test-end-to-end
-        '';
-        result = jail "jail-test-end-to-end" leafPkg [
-          time-zone
-          network
-          mount-cwd
-          (set-env "FOO" "bar")
-        ];
-        sbpl = result.jailData.sbpl;
-      in {
-        envExecPresent = lib.hasInfix
-          ''(allow process-exec (literal "/usr/bin/env"))'' sbpl;
-        cwdExecPresent = lib.hasInfix
-          ''(allow process-exec (subpath "__JAIL_CWD__"))'' sbpl;
-        curlExecAbsent = !(lib.hasInfix "/usr/bin/curl" sbpl);
-        python3ExecAbsent = !(lib.hasInfix "/usr/bin/python3" sbpl);
-        sshdExecAbsent = !(lib.hasInfix "/usr/sbin/sshd" sbpl);
-        blanketProcessAllowAbsent = !(lib.hasInfix "(allow process*)" sbpl);
-      };
+      expr =
+        let
+          leafPkg = pkgs.runCommand "jail-test-end-to-end-pkg" { } ''
+            mkdir -p $out/bin; : > $out/bin/jail-test-end-to-end
+          '';
+          result = jail "jail-test-end-to-end" leafPkg [
+            time-zone
+            network
+            mount-cwd
+            (set-env "FOO" "bar")
+          ];
+          sbpl = result.jailData.sbpl;
+        in
+        {
+          envExecPresent = lib.hasInfix ''(allow process-exec (literal "/usr/bin/env"))'' sbpl;
+          cwdExecPresent = lib.hasInfix ''(allow process-exec (subpath "__JAIL_CWD__"))'' sbpl;
+          curlExecAbsent = !(lib.hasInfix "/usr/bin/curl" sbpl);
+          python3ExecAbsent = !(lib.hasInfix "/usr/bin/python3" sbpl);
+          sshdExecAbsent = !(lib.hasInfix "/usr/sbin/sshd" sbpl);
+          blanketProcessAllowAbsent = !(lib.hasInfix "(allow process*)" sbpl);
+        };
       expected = {
         envExecPresent = true;
         cwdExecPresent = true;

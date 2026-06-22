@@ -26,8 +26,7 @@ let
   # nixosModules. Tests that override `package` directly pass an empty
   # fake flake; tests that exercise the `package` default pass a fake
   # flake whose `.override` records what it was called with.
-  importModule = flakeArg:
-    import ../modules/sandboxed-darwin/default.nix flakeArg;
+  importModule = flakeArg: import ../modules/sandboxed-darwin/default.nix flakeArg;
 
   # Capture flake: the default-built `package` calls
   # `flake.packages.${system}.sandboxed.override { stateDir = cfg.stateDir; }`.
@@ -35,9 +34,11 @@ let
   # `passthru.capturedStateDir` records the argument the module passed.
   captureFlake = {
     packages.${pkgs.stdenv.hostPlatform.system}.sandboxed = {
-      override = args: pkgs.runCommand "sandboxed-capture" {
-        passthru.capturedStateDir = args.stateDir;
-      } "touch $out";
+      override =
+        args:
+        pkgs.runCommand "sandboxed-capture" {
+          passthru.capturedStateDir = args.stateDir;
+        } "touch $out";
     };
   };
 
@@ -64,16 +65,21 @@ let
     };
   };
 
-  evalWith = { flake ? { }, cfg ? { } }: (lib.evalModules {
-    modules = [
-      (importModule flake)
-      stubSchema
-      ({ ... }: {
-        _module.args.pkgs = pkgs;
-      })
-      { security.sandboxed = cfg; }
-    ];
-  }).config;
+  evalWith =
+    {
+      flake ? { },
+      cfg ? { },
+    }:
+    (lib.evalModules {
+      modules = [
+        (importModule flake)
+        stubSchema
+        ({ ... }: {
+          _module.args.pkgs = pkgs;
+        })
+        { security.sandboxed = cfg; }
+      ];
+    }).config;
 
   enabledConfig = evalWith {
     cfg = {
@@ -142,9 +148,9 @@ let
 
   failures = lib.runTests tests;
 in
-if failures == [ ]
-then pkgs.runCommand "sandboxed-darwin-module-tests" { } ''
-  echo "sandboxed-darwin module tests passed" > $out
-''
+if failures == [ ] then
+  pkgs.runCommand "sandboxed-darwin-module-tests" { } ''
+    echo "sandboxed-darwin module tests passed" > $out
+  ''
 else
   throw "sandboxed-darwin module tests failed:\n${builtins.toJSON failures}"

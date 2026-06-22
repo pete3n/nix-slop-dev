@@ -34,32 +34,30 @@ let
     # via mkSandboxProfileTemplate's already-tested jailFragment parameter.
     # Anti-test against a regression that silently drops one boundary.
     testWithJailContainsBothBoundaries = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = ''
-              (deny default)
-              (allow file-read* (literal "/x"))
-            '';
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/jail-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = ''
+                (deny default)
+                (allow file-read* (literal "/x"))
+              '';
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/jail-test";
+            };
           };
+          result = render.combinedSbplTemplate { jail = fakeJail; };
+        in
+        {
+          hasNetworkDeny = lib.hasInfix "(deny network-outbound)" result;
+          hasProxyAllow = lib.hasInfix ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))'' result;
+          hasJailDenyDefault = lib.hasInfix "(deny default)" result;
+          hasJailLiteralAllow = lib.hasInfix ''(allow file-read* (literal "/x"))'' result;
         };
-        result = render.combinedSbplTemplate { jail = fakeJail; };
-      in {
-        hasNetworkDeny = lib.hasInfix "(deny network-outbound)" result;
-        hasProxyAllow = lib.hasInfix
-          ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))''
-          result;
-        hasJailDenyDefault = lib.hasInfix "(deny default)" result;
-        hasJailLiteralAllow = lib.hasInfix
-          ''(allow file-read* (literal "/x"))''
-          result;
-      };
       expected = {
         hasNetworkDeny = true;
         hasProxyAllow = true;
@@ -92,27 +90,26 @@ let
     # permitted` from claude-code's bash child when launched with PWD
     # under /tmp.
     testJailWrapperSedSubstitutesAllPlaceholders = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/jail-sed-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/jail-sed-test";
+            };
           };
+          pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+        in
+        {
+          hasProxyPortSub = lib.hasInfix ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+          hasJailCwdSub = lib.hasInfix ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
+          hasJailHomeSub = lib.hasInfix ''-e "s|__JAIL_HOME__|''${HOME}|g"'' pipeline;
         };
-        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
-      in {
-        hasProxyPortSub = lib.hasInfix
-          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
-        hasJailCwdSub = lib.hasInfix
-          ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
-        hasJailHomeSub = lib.hasInfix
-          ''-e "s|__JAIL_HOME__|''${HOME}|g"'' pipeline;
-      };
       expected = {
         hasProxyPortSub = true;
         hasJailCwdSub = true;
@@ -126,14 +123,15 @@ let
     # would dilute the contract and confuse anyone reading the wrapper to
     # understand network-only mode. Pin the minimal pipeline.
     testNoJailWrapperSedPipelineIsPortOnly = {
-      expr = let
-        pipeline = render.mkProfileSedPipeline { };
-      in {
-        hasProxyPortSub = lib.hasInfix
-          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
-        hasNoJailCwdSub = !(lib.hasInfix "__JAIL_CWD__" pipeline);
-        hasNoJailHomeSub = !(lib.hasInfix "__JAIL_HOME__" pipeline);
-      };
+      expr =
+        let
+          pipeline = render.mkProfileSedPipeline { };
+        in
+        {
+          hasProxyPortSub = lib.hasInfix ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+          hasNoJailCwdSub = !(lib.hasInfix "__JAIL_CWD__" pipeline);
+          hasNoJailHomeSub = !(lib.hasInfix "__JAIL_HOME__" pipeline);
+        };
       expected = {
         hasProxyPortSub = true;
         hasNoJailCwdSub = true;
@@ -156,34 +154,32 @@ let
     # see [[project-jail-nix-placeholder-substitution]] for the
     # canonical regression from Linux commit 4c3b2a6.
     testJailWrapperSedSubstitutesProjectNamePlaceholder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            hostResolve = [ ];
-            mainBin = "/nix/store/fake/bin/project-name-sed";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              hostResolve = [ ];
+              mainBin = "/nix/store/fake/bin/project-name-sed";
+            };
           };
+          pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+        in
+        {
+          # The substitution is present and anchored on `/projects/` so it
+          # only touches destination paths in the SBPL — write-text source
+          # store names (dash-separated) are not in the match window.
+          hasAnchoredProjectNameSub = lib.hasInfix ''-e "s|/projects/__SLOP_ENV_PROJECT_NAME__|/projects/''${_project_name}|g"'' pipeline;
+          # Existing subs survive — project-name is additive, not a
+          # replacement for the static jail subs.
+          hasProxyPortSub = lib.hasInfix ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+          hasJailCwdSub = lib.hasInfix ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
         };
-        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
-      in {
-        # The substitution is present and anchored on `/projects/` so it
-        # only touches destination paths in the SBPL — write-text source
-        # store names (dash-separated) are not in the match window.
-        hasAnchoredProjectNameSub = lib.hasInfix
-          ''-e "s|/projects/__SLOP_ENV_PROJECT_NAME__|/projects/''${_project_name}|g"''
-          pipeline;
-        # Existing subs survive — project-name is additive, not a
-        # replacement for the static jail subs.
-        hasProxyPortSub = lib.hasInfix
-          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
-        hasJailCwdSub = lib.hasInfix
-          ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
-      };
       expected = {
         hasAnchoredProjectNameSub = true;
         hasProxyPortSub = true;
@@ -197,9 +193,11 @@ let
     # project-name sub. Anti-test against a regression that always
     # emits the sub regardless of mode.
     testNoJailWrapperSedPipelineHasNoProjectNameSub = {
-      expr = let
-        pipeline = render.mkProfileSedPipeline { };
-      in !(lib.hasInfix "__SLOP_ENV_PROJECT_NAME__" pipeline);
+      expr =
+        let
+          pipeline = render.mkProfileSedPipeline { };
+        in
+        !(lib.hasInfix "__SLOP_ENV_PROJECT_NAME__" pipeline);
       expected = true;
     };
 
@@ -210,23 +208,25 @@ let
     # Order is preserved — the combinator-merge order in the jail
     # constructor is the same order preflight executes.
     testPreflightBlockEmitsSnippetsInOrder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [
-              ''mkdir -p "/Users/x/scratch"''
-              ''ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"''
-            ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/preflight-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [
+                ''mkdir -p "/Users/x/scratch"''
+                ''ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"''
+              ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/preflight-test";
+            };
           };
-        };
-        block = render.mkPreflightBlock { jail = fakeJail; };
-      in block;
+          block = render.mkPreflightBlock { jail = fakeJail; };
+        in
+        block;
       expected = ''
         mkdir -p "/Users/x/scratch"
         ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"
@@ -257,22 +257,24 @@ let
     # `/projects/` anchor as the SBPL sed pipeline so write-text
     # source store names (dash-separated) survive untouched.
     testPreflightBlockSubstitutesProjectNamePlaceholder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [
-              ''mkdir -p "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
-              ''ln -sfn "/nix/store/abc-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md" "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/CLAUDE.md"''
-            ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/preflight-placeholder";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [
+                ''mkdir -p "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
+                ''ln -sfn "/nix/store/abc-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md" "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/CLAUDE.md"''
+              ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/preflight-placeholder";
+            };
           };
-        };
-      in render.mkPreflightBlock { jail = fakeJail; };
+        in
+        render.mkPreflightBlock { jail = fakeJail; };
       expected = ''
         mkdir -p "$HOME/.local/state/claude/projects/''${_project_name}"
         ln -sfn "/nix/store/abc-jail-write-text--.local-state-claude-projects-__SLOP_ENV_PROJECT_NAME__-CLAUDE.md" "$HOME/.local/state/claude/projects/''${_project_name}/CLAUDE.md"
@@ -286,22 +288,24 @@ let
     # (combinator-emitted preflight lines that mention only host paths
     # like /etc/* or /usr/* should be untouched).
     testPreflightBlockLeavesNonPlaceholderSnippetsByteEqual = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [
-              ''mkdir -p "/Users/x/scratch"''
-              ''ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"''
-            ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/preflight-no-placeholder";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [
+                ''mkdir -p "/Users/x/scratch"''
+                ''ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"''
+              ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/preflight-no-placeholder";
+            };
           };
-        };
-      in render.mkPreflightBlock { jail = fakeJail; };
+        in
+        render.mkPreflightBlock { jail = fakeJail; };
       expected = ''
         mkdir -p "/Users/x/scratch"
         ln -sfn "/nix/store/abc/cfg" "/Users/x/.config/foo"
@@ -313,19 +317,21 @@ let
     # rather than blank lines. Anti-test against a `concatStringsSep "\n"`
     # bug that would leave a trailing newline at end-of-block.
     testPreflightBlockEmptyWhenJailPreflightListIsEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/preflight-empty";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/preflight-empty";
+            };
           };
-        };
-      in render.mkPreflightBlock { jail = fakeJail; };
+        in
+        render.mkPreflightBlock { jail = fakeJail; };
       expected = "";
     };
 
@@ -337,19 +343,25 @@ let
     # forward. The lib/jail header documents this contract; slice 11's
     # job is to enforce it in the wrapper.
     testCleanupBlockReversesOrder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ "first-merged" "second-merged" "third-merged" ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/cleanup-order";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [
+                "first-merged"
+                "second-merged"
+                "third-merged"
+              ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/cleanup-order";
+            };
           };
-        };
-      in render.mkCleanupBlock { jail = fakeJail; };
+        in
+        render.mkCleanupBlock { jail = fakeJail; };
       expected = ''
         third-merged
         second-merged
@@ -365,24 +377,25 @@ let
     # file's symlink dangling and the post-sandbox host filesystem in
     # the wrong state.
     testCleanupBlockTmpfsThenWriteTextReversesToFileBeforeDir = {
-      expr = let
-        jailLib = import ../lib/jail { inherit lib pkgs; };
-        leafPkg = pkgs.runCommand "jail-cleanup-leaf" { } ''
-          mkdir -p $out/bin; : > $out/bin/jail-cleanup-leaf
-        '';
-        builtJail = jailLib.jail "jail-cleanup-leaf" leafPkg [
-          (jailLib.combinators.tmpfs "/Users/x/scratch")
-          (jailLib.combinators.write-text
-            "/Users/x/scratch/file" "content")
-        ];
-        block = render.mkCleanupBlock { jail = builtJail; };
-        rmRfIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString
-            ''rm -rf "/Users/x/scratch"'' block));
-        rmFIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString
-            ''rm -f "/Users/x/scratch/file"'' block));
-      in rmFIdx < rmRfIdx;
+      expr =
+        let
+          jailLib = import ../lib/jail { inherit lib pkgs; };
+          leafPkg = pkgs.runCommand "jail-cleanup-leaf" { } ''
+            mkdir -p $out/bin; : > $out/bin/jail-cleanup-leaf
+          '';
+          builtJail = jailLib.jail "jail-cleanup-leaf" leafPkg [
+            (jailLib.combinators.tmpfs "/Users/x/scratch")
+            (jailLib.combinators.write-text "/Users/x/scratch/file" "content")
+          ];
+          block = render.mkCleanupBlock { jail = builtJail; };
+          rmRfIdx = lib.strings.stringLength (
+            builtins.head (lib.splitString ''rm -rf "/Users/x/scratch"'' block)
+          );
+          rmFIdx = lib.strings.stringLength (
+            builtins.head (lib.splitString ''rm -f "/Users/x/scratch/file"'' block)
+          );
+        in
+        rmFIdx < rmRfIdx;
       expected = true;
     };
 
@@ -399,22 +412,24 @@ let
     # lib/jail contract); the rewrite applies AFTER reversal, so the
     # expected output reflects reverse-merge order.
     testCleanupBlockSubstitutesProjectNamePlaceholder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [
-              ''rm -rf "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
-              ''rm -f "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/settings.json"''
-            ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/cleanup-placeholder";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [
+                ''rm -rf "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__"''
+                ''rm -f "$HOME/.local/state/claude/projects/__SLOP_ENV_PROJECT_NAME__/settings.json"''
+              ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/cleanup-placeholder";
+            };
           };
-        };
-      in render.mkCleanupBlock { jail = fakeJail; };
+        in
+        render.mkCleanupBlock { jail = fakeJail; };
       expected = ''
         rm -f "$HOME/.local/state/claude/projects/''${_project_name}/settings.json"
         rm -rf "$HOME/.local/state/claude/projects/''${_project_name}"
@@ -425,22 +440,24 @@ let
     # Cleanup snippets that don't reference cfgDir (e.g., generic tmpfs
     # teardown under /tmp/...) must pass through byte-for-byte.
     testCleanupBlockLeavesNonPlaceholderSnippetsByteEqual = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [
-              ''rm -rf "/tmp/some-tmpfs"''
-              ''rm -f "/Users/x/.cache/foo"''
-            ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/cleanup-no-placeholder";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [
+                ''rm -rf "/tmp/some-tmpfs"''
+                ''rm -f "/Users/x/.cache/foo"''
+              ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/cleanup-no-placeholder";
+            };
           };
-        };
-      in render.mkCleanupBlock { jail = fakeJail; };
+        in
+        render.mkCleanupBlock { jail = fakeJail; };
       expected = ''
         rm -f "/Users/x/.cache/foo"
         rm -rf "/tmp/some-tmpfs"
@@ -459,19 +476,21 @@ let
     # cleanup — set-env, ro-bind, time-zone) also emits empty text. Pins
     # the same no-trailing-newline contract mkPreflightBlock has.
     testCleanupBlockEmptyWhenJailCleanupListIsEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/cleanup-empty";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/cleanup-empty";
+            };
           };
-        };
-      in render.mkCleanupBlock { jail = fakeJail; };
+        in
+        render.mkCleanupBlock { jail = fakeJail; };
       expected = "";
     };
 
@@ -481,19 +500,25 @@ let
     # reviewable across template edits. Match the bash-array push idiom the
     # wrapper already uses for the static HOME/USER/PATH/TERM/PROXY entries.
     testJailEnvBlockEmitsKeyValuePairsAlphabetical = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { B = "2"; A = "1"; CLAUDE_CONFIG_DIR = "/Users/x/.config"; };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/env-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = {
+                B = "2";
+                A = "1";
+                CLAUDE_CONFIG_DIR = "/Users/x/.config";
+              };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/env-test";
+            };
           };
-        };
-      in render.mkJailEnvBlock { jail = fakeJail; };
+        in
+        render.mkJailEnvBlock { jail = fakeJail; };
       expected = ''
         _env_args+=("A=1")
         _env_args+=("B=2")
@@ -506,19 +531,24 @@ let
     # `-e <var>` (`env_fwd` array) loop shape so jailed and host-provided
     # forwards have identical semantics — only non-empty values pass.
     testJailEnvBlockEmitsConditionalForwardLoop = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ "FOO" "BAR" ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/fwd-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [
+                "FOO"
+                "BAR"
+              ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/fwd-test";
+            };
           };
-        };
-      in render.mkJailEnvBlock { jail = fakeJail; };
+        in
+        render.mkJailEnvBlock { jail = fakeJail; };
       expected = ''
         for _jail_fwd_var in FOO BAR; do
         	_jail_fwd_val="''${!_jail_fwd_var:-}"
@@ -535,24 +565,26 @@ let
     # existing `-e` precedence: later `_env_args+=()` shadows earlier in
     # `env -i` arg order).
     testJailEnvBlockEnvBeforeForward = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { K = "v"; };
-            envForward = [ "FWD" ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/both";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = {
+                K = "v";
+              };
+              envForward = [ "FWD" ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/both";
+            };
           };
-        };
-        block = render.mkJailEnvBlock { jail = fakeJail; };
-        envIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString ''_env_args+=("K=v")'' block));
-        forIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString "for _jail_fwd_var" block));
-      in envIdx < forIdx;
+          block = render.mkJailEnvBlock { jail = fakeJail; };
+          envIdx = lib.strings.stringLength (builtins.head (lib.splitString ''_env_args+=("K=v")'' block));
+          forIdx = lib.strings.stringLength (builtins.head (lib.splitString "for _jail_fwd_var" block));
+        in
+        envIdx < forIdx;
       expected = true;
     };
 
@@ -562,19 +594,21 @@ let
     };
 
     testJailEnvBlockEmptyWhenJailEnvAndForwardEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/none";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/none";
+            };
           };
-        };
-      in render.mkJailEnvBlock { jail = fakeJail; };
+        in
+        render.mkJailEnvBlock { jail = fakeJail; };
       expected = "";
     };
 
@@ -585,19 +619,24 @@ let
     # add-pkg-deps pkg wins lookup; lib/jail slice 8 test
     # testAddPkgDepsMultiPkgPreservesBinPathOrder pins this in the lib).
     testJailPathPrefixJoinsBinPathsInOrder = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ "/nix/store/a/bin" "/nix/store/b/bin" ];
-            mainBin = "/nix/store/fake/bin/path-test";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [
+                "/nix/store/a/bin"
+                "/nix/store/b/bin"
+              ];
+              mainBin = "/nix/store/fake/bin/path-test";
+            };
           };
-        };
-      in render.mkJailPathPrefix { jail = fakeJail; };
+        in
+        render.mkJailPathPrefix { jail = fakeJail; };
       expected = "/nix/store/a/bin:/nix/store/b/bin:";
     };
 
@@ -607,19 +646,21 @@ let
     };
 
     testJailPathPrefixEmptyWhenBinPathsListEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/no-bin";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/no-bin";
+            };
           };
-        };
-      in render.mkJailPathPrefix { jail = fakeJail; };
+        in
+        render.mkJailPathPrefix { jail = fakeJail; };
       expected = "";
     };
 
@@ -629,19 +670,21 @@ let
     # user never types the binary name; the per-jail wrapper IS the entry
     # point, so `"$@"` carries only arguments.
     testExecCommandUsesMainBinInJailMode = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/jail-main";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/jail-main";
+            };
           };
-        };
-      in render.mkExecCommand { jail = fakeJail; };
+        in
+        render.mkExecCommand { jail = fakeJail; };
       expected = ''"/nix/store/fake/bin/jail-main" "$@"'';
     };
 
@@ -656,26 +699,28 @@ let
     };
 
     testNetworkPrecedesJailFragment = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "(deny default)\n";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            mainBin = "/nix/store/fake/bin/order";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "(deny default)\n";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              mainBin = "/nix/store/fake/bin/order";
+            };
           };
-        };
-        result = render.combinedSbplTemplate { jail = fakeJail; };
-        proxyIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString
-            ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))''
-            result));
-        jailIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString "(deny default)" result));
-      in proxyIdx < jailIdx;
+          result = render.combinedSbplTemplate { jail = fakeJail; };
+          proxyIdx = lib.strings.stringLength (
+            builtins.head (
+              lib.splitString ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))'' result
+            )
+          );
+          jailIdx = lib.strings.stringLength (builtins.head (lib.splitString "(deny default)" result));
+        in
+        proxyIdx < jailIdx;
       expected = true;
     };
 
@@ -688,36 +733,38 @@ let
     # contain `/`) — matches the existing __JAIL_CWD__ / __JAIL_HOME__
     # substitutions.
     testJailWrapperSedSubstitutesHostResolvePlaceholders = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            hostResolve = [
-              { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
-              { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
-            ];
-            mainBin = "/nix/store/fake/bin/host-resolve-sed";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              hostResolve = [
+                {
+                  placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
+                  path = "/etc/bashrc";
+                }
+                {
+                  placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__";
+                  path = "/etc/zshrc";
+                }
+              ];
+              mainBin = "/nix/store/fake/bin/host-resolve-sed";
+            };
           };
+          pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+        in
+        {
+          hasBashrcSub = lib.hasInfix ''-e "s|__JAIL_HOST_RESOLVE_ETC_BASHRC__|''${_jail_hr_etc_bashrc}|g"'' pipeline;
+          hasZshrcSub = lib.hasInfix ''-e "s|__JAIL_HOST_RESOLVE_ETC_ZSHRC__|''${_jail_hr_etc_zshrc}|g"'' pipeline;
+          # Existing subs must still appear — host-resolve is additive.
+          hasProxyPortSub = lib.hasInfix ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
+          hasJailCwdSub = lib.hasInfix ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
         };
-        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
-      in {
-        hasBashrcSub = lib.hasInfix
-          ''-e "s|__JAIL_HOST_RESOLVE_ETC_BASHRC__|''${_jail_hr_etc_bashrc}|g"''
-          pipeline;
-        hasZshrcSub = lib.hasInfix
-          ''-e "s|__JAIL_HOST_RESOLVE_ETC_ZSHRC__|''${_jail_hr_etc_zshrc}|g"''
-          pipeline;
-        # Existing subs must still appear — host-resolve is additive.
-        hasProxyPortSub = lib.hasInfix
-          ''-e "s/__PROXYPORT__/''${_proxy_port}/g"'' pipeline;
-        hasJailCwdSub = lib.hasInfix
-          ''-e "s|__JAIL_CWD__|''${_jail_cwd}|g"'' pipeline;
-      };
       expected = {
         hasBashrcSub = true;
         hasZshrcSub = true;
@@ -731,25 +778,26 @@ let
     # stays at the existing proxy-port + cwd + home triple. Anti-test
     # against a fold that would emit an empty `-e` argument.
     testJailWrapperSedNoHostResolveSubsWhenListEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            hostResolve = [ ];
-            mainBin = "/nix/store/fake/bin/host-resolve-empty-sed";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              hostResolve = [ ];
+              mainBin = "/nix/store/fake/bin/host-resolve-empty-sed";
+            };
           };
+          pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
+        in
+        {
+          hasNoHostResolveSub = !(lib.hasInfix "__JAIL_HOST_RESOLVE_" pipeline);
+          hasJailHomeSub = lib.hasInfix ''-e "s|__JAIL_HOME__|''${HOME}|g"'' pipeline;
         };
-        pipeline = render.mkProfileSedPipeline { jail = fakeJail; };
-      in {
-        hasNoHostResolveSub = !(lib.hasInfix "__JAIL_HOST_RESOLVE_" pipeline);
-        hasJailHomeSub = lib.hasInfix
-          ''-e "s|__JAIL_HOME__|''${HOME}|g"'' pipeline;
-      };
       expected = {
         hasNoHostResolveSub = true;
         hasJailHomeSub = true;
@@ -766,26 +814,34 @@ let
     # `${pkgs.coreutils}/bin/readlink` while the render layer stays free
     # of pkgs.
     testHostResolveResolutionBlockEmitsReadlinkAndSentinelPerEntry = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            hostResolve = [
-              { placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__"; path = "/etc/bashrc"; }
-              { placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__"; path = "/etc/zshrc"; }
-            ];
-            mainBin = "/nix/store/fake/bin/host-resolve-block";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              hostResolve = [
+                {
+                  placeholder = "__JAIL_HOST_RESOLVE_ETC_BASHRC__";
+                  path = "/etc/bashrc";
+                }
+                {
+                  placeholder = "__JAIL_HOST_RESOLVE_ETC_ZSHRC__";
+                  path = "/etc/zshrc";
+                }
+              ];
+              mainBin = "/nix/store/fake/bin/host-resolve-block";
+            };
           };
+        in
+        render.mkHostResolveResolutionBlock {
+          jail = fakeJail;
+          readlinkBin = "/fake/readlink";
         };
-      in render.mkHostResolveResolutionBlock {
-        jail = fakeJail;
-        readlinkBin = "/fake/readlink";
-      };
       expected = ''
         _jail_hr_etc_bashrc="$(/fake/readlink -f '/etc/bashrc' 2>/dev/null || echo '/__jail_host_resolve_no_match_etc_bashrc__')"
         _jail_hr_etc_zshrc="$(/fake/readlink -f '/etc/zshrc' 2>/dev/null || echo '/__jail_host_resolve_no_match_etc_zshrc__')"
@@ -808,23 +864,25 @@ let
     # have. Anti-test against a `concatStringsSep "\n"` impl that leaves a
     # blank line in the rendered wrapper.
     testHostResolveResolutionBlockEmptyWhenListEmpty = {
-      expr = let
-        fakeJail = {
-          jailData = {
-            sbpl = "";
-            preflight = [ ];
-            cleanup = [ ];
-            env = { };
-            envForward = [ ];
-            binPaths = [ ];
-            hostResolve = [ ];
-            mainBin = "/nix/store/fake/bin/host-resolve-empty-block";
+      expr =
+        let
+          fakeJail = {
+            jailData = {
+              sbpl = "";
+              preflight = [ ];
+              cleanup = [ ];
+              env = { };
+              envForward = [ ];
+              binPaths = [ ];
+              hostResolve = [ ];
+              mainBin = "/nix/store/fake/bin/host-resolve-empty-block";
+            };
           };
+        in
+        render.mkHostResolveResolutionBlock {
+          jail = fakeJail;
+          readlinkBin = "/fake/readlink";
         };
-      in render.mkHostResolveResolutionBlock {
-        jail = fakeJail;
-        readlinkBin = "/fake/readlink";
-      };
       expected = "";
     };
 
@@ -835,11 +893,12 @@ let
     # `$out/bin/sandboxed`, clashing when both end up in a devShell's PATH.
     # The default preserves the existing network-only contract: `sandboxed`.
     testBinNameDefaultsToSandboxed = {
-      expr = (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
-        sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
-          mkdir -p $out/bin; touch $out/bin/sandbox-proxy
-        '';
-      }).meta.mainProgram or "MISSING";
+      expr =
+        (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
+          sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
+            mkdir -p $out/bin; touch $out/bin/sandbox-proxy
+          '';
+        }).meta.mainProgram or "MISSING";
       expected = "sandboxed";
     };
 
@@ -848,12 +907,13 @@ let
     # `binName = "sandboxed-jailed-claude"` (and `…-jailed-shell`) so the two
     # per-jail wrappers live side-by-side on PATH.
     testBinNameAcceptsCustomValue = {
-      expr = (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
-        sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
-          mkdir -p $out/bin; touch $out/bin/sandbox-proxy
-        '';
-        binName = "sandboxed-jailed-claude";
-      }).meta.mainProgram or "MISSING";
+      expr =
+        (pkgs.callPackage ../packages/sandboxed-darwin/default.nix {
+          sandbox-proxy = pkgs.runCommand "fake-sandbox-proxy" { } ''
+            mkdir -p $out/bin; touch $out/bin/sandbox-proxy
+          '';
+          binName = "sandboxed-jailed-claude";
+        }).meta.mainProgram or "MISSING";
       expected = "sandboxed-jailed-claude";
     };
   };
@@ -872,8 +932,13 @@ let
   # sandbox-exec would deny the read.
   anchorFakeJail = {
     jailData = {
-      sbpl = ""; preflight = [ ]; cleanup = [ ];
-      env = { }; envForward = [ ]; binPaths = [ ]; hostResolve = [ ];
+      sbpl = "";
+      preflight = [ ];
+      cleanup = [ ];
+      env = { };
+      envForward = [ ];
+      binPaths = [ ];
+      hostResolve = [ ];
       mainBin = "/nix/store/fake/bin/anchor-behaviour";
     };
   };

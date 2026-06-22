@@ -19,17 +19,23 @@ let
     # which sed-substitutes the sentinel with the kernel-picked proxy port
     # at runtime (issue 08).
     testTemplateDefaultPlaceholder = {
-      expr = lib.hasInfix ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))''
-        (mkSandboxProfileTemplate { });
+      expr = lib.hasInfix ''(allow network-outbound (remote ip "localhost:__PROXYPORT__"))'' (
+        mkSandboxProfileTemplate { }
+      );
       expected = true;
     };
 
     testTemplateCustomPlaceholder = {
       expr = {
-        substituted = lib.hasInfix ''(allow network-outbound (remote ip "localhost:@@PORT@@"))''
-          (mkSandboxProfileTemplate { portPlaceholder = "@@PORT@@"; });
-        defaultAbsent = !(lib.hasInfix "__PROXYPORT__"
-          (mkSandboxProfileTemplate { portPlaceholder = "@@PORT@@"; }));
+        substituted =
+          lib.hasInfix ''(allow network-outbound (remote ip "localhost:@@PORT@@"))''
+            (mkSandboxProfileTemplate {
+              portPlaceholder = "@@PORT@@";
+            });
+        defaultAbsent =
+          !(lib.hasInfix "__PROXYPORT__" (mkSandboxProfileTemplate {
+            portPlaceholder = "@@PORT@@";
+          }));
       };
       expected = {
         substituted = true;
@@ -38,14 +44,18 @@ let
     };
 
     testTemplateRejectsEmptyPlaceholder = {
-      expr = (builtins.tryEval
-        (mkSandboxProfileTemplate { portPlaceholder = ""; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfileTemplate {
+          portPlaceholder = "";
+        })).success;
       expected = false;
     };
 
     testTemplateRejectsNonStringPlaceholder = {
-      expr = (builtins.tryEval
-        (mkSandboxProfileTemplate { portPlaceholder = 8080; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfileTemplate {
+          portPlaceholder = 8080;
+        })).success;
       expected = false;
     };
 
@@ -78,13 +88,16 @@ let
     };
 
     testVersionHeader = {
-      expr = lib.hasPrefix "(version 1)" (mkSandboxProfile { proxyPort = 8080; });
+      expr = lib.hasPrefix "(version 1)" (mkSandboxProfile {
+        proxyPort = 8080;
+      });
       expected = true;
     };
 
     testDenyNetworkOutbound = {
-      expr = lib.hasInfix "(deny network-outbound)"
-        (mkSandboxProfile { proxyPort = 8080; });
+      expr = lib.hasInfix "(deny network-outbound)" (mkSandboxProfile {
+        proxyPort = 8080;
+      });
       expected = true;
     };
 
@@ -94,10 +107,10 @@ let
     testAllowDefaultBeforeNetworkDeny =
       let
         profile = mkSandboxProfile { proxyPort = 8080; };
-        allowIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString "(allow default)" profile));
-        denyIdx = lib.strings.stringLength
-          (builtins.head (lib.splitString "(deny network-outbound)" profile));
+        allowIdx = lib.strings.stringLength (builtins.head (lib.splitString "(allow default)" profile));
+        denyIdx = lib.strings.stringLength (
+          builtins.head (lib.splitString "(deny network-outbound)" profile)
+        );
       in
       {
         expr = allowIdx < denyIdx;
@@ -106,12 +119,16 @@ let
 
     testProxyPortSubstitution = {
       expr = {
-        low = lib.hasInfix ''(allow network-outbound (remote ip "localhost:8080"))''
-          (mkSandboxProfile { proxyPort = 8080; });
-        high = lib.hasInfix ''(allow network-outbound (remote ip "localhost:49152"))''
-          (mkSandboxProfile { proxyPort = 49152; });
-        notHardcoded = !(lib.hasInfix "8080"
-          (mkSandboxProfile { proxyPort = 49152; }));
+        low = lib.hasInfix ''(allow network-outbound (remote ip "localhost:8080"))'' (mkSandboxProfile {
+          proxyPort = 8080;
+        });
+        high = lib.hasInfix ''(allow network-outbound (remote ip "localhost:49152"))'' (mkSandboxProfile {
+          proxyPort = 49152;
+        });
+        notHardcoded =
+          !(lib.hasInfix "8080" (mkSandboxProfile {
+            proxyPort = 49152;
+          }));
       };
       expected = {
         low = true;
@@ -158,29 +175,47 @@ let
     # loads but allows nothing. Fail-closed at eval time so misconfigs
     # surface at `nix build`, not at runtime under sandbox-exec.
     testRejectsZeroPort = {
-      expr = (builtins.tryEval (mkSandboxProfile { proxyPort = 0; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfile {
+          proxyPort = 0;
+        })).success;
       expected = false;
     };
 
     testRejectsOverflowPort = {
-      expr = (builtins.tryEval (mkSandboxProfile { proxyPort = 65536; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfile {
+          proxyPort = 65536;
+        })).success;
       expected = false;
     };
 
     testRejectsNegativePort = {
-      expr = (builtins.tryEval (mkSandboxProfile { proxyPort = -1; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfile {
+          proxyPort = -1;
+        })).success;
       expected = false;
     };
 
     testRejectsNonIntPort = {
-      expr = (builtins.tryEval (mkSandboxProfile { proxyPort = "8080"; })).success;
+      expr =
+        (builtins.tryEval (mkSandboxProfile {
+          proxyPort = "8080";
+        })).success;
       expected = false;
     };
 
     testAcceptsBoundaryPorts = {
       expr = {
-        lo = (builtins.tryEval (mkSandboxProfile { proxyPort = 1; })).success;
-        hi = (builtins.tryEval (mkSandboxProfile { proxyPort = 65535; })).success;
+        lo =
+          (builtins.tryEval (mkSandboxProfile {
+            proxyPort = 1;
+          })).success;
+        hi =
+          (builtins.tryEval (mkSandboxProfile {
+            proxyPort = 65535;
+          })).success;
       };
       expected = {
         lo = true;

@@ -79,14 +79,16 @@ let
   # of the rewritten prefixes (including paths that merely *contain*
   # /tmp deeper in the tree, and paths already under /private) pass
   # through unchanged.
-  canonicalizePath = path:
-    if lib.hasPrefix "/tmp/" path || path == "/tmp"
-    then "/private" + path
-    else if lib.hasPrefix "/var/" path || path == "/var"
-    then "/private" + path
-    else if lib.hasPrefix "/etc/" path || path == "/etc"
-    then "/private" + path
-    else path;
+  canonicalizePath =
+    path:
+    if lib.hasPrefix "/tmp/" path || path == "/tmp" then
+      "/private" + path
+    else if lib.hasPrefix "/var/" path || path == "/var" then
+      "/private" + path
+    else if lib.hasPrefix "/etc/" path || path == "/etc" then
+      "/private" + path
+    else
+      path;
 
   # Escapes a string for use inside an SBPL string literal.
   # Per spike 10 F6: " must become \" (otherwise the string terminates
@@ -95,33 +97,36 @@ let
   # Spaces and parens inside a quoted literal are fine unescaped.
   # Order matters: backslash MUST be replaced first so the \ inserted
   # for the quote-escape isn't itself escaped on a second pass.
-  sbplEscape = str:
-    let backslashSafe = lib.replaceStrings [ "\\" ] [ "\\\\" ] str;
-    in lib.replaceStrings [ ''"'' ] [ ''\"'' ] backslashSafe;
+  sbplEscape =
+    str:
+    let
+      backslashSafe = lib.replaceStrings [ "\\" ] [ "\\\\" ] str;
+    in
+    lib.replaceStrings [ ''"'' ] [ ''\"'' ] backslashSafe;
 
   # True when `value` was wrapped by `combinators.noescape`. The wrapper
   # is the only structural shape combinators distinguish from a plain
   # string for path arguments.
-  isNoEscape = value:
-    builtins.typeOf value == "set" && value ? _noescape;
+  isNoEscape = value: builtins.typeOf value == "set" && value ? _noescape;
 
   # Returns the underlying path string for either a plain string or a
   # noescape-wrapped value. Used for src/dst equality comparison in
   # `bindPreflight` so `(noescape "~/x") == (noescape "~/x")` evaluates
   # to "same path" via string identity rather than Nix set equality.
-  resolvePath = path:
-    if isNoEscape path then path._noescape else path;
+  resolvePath = path: if isNoEscape path then path._noescape else path;
 
   # Replaces a leading `~/` (or bare `~`) with `repl`. Mid-string `~`
   # is left alone — filenames legitimately containing `~` (e.g. emacs
   # backup files like `foo~`) must not be rewritten. Behaviour for `~`
   # at position 0 mirrors POSIX shell tilde expansion.
-  expandLeadingTilde = repl: str:
-    if lib.hasPrefix "~/" str
-    then repl + lib.removePrefix "~" str
-    else if str == "~"
-    then repl
-    else str;
+  expandLeadingTilde =
+    repl: str:
+    if lib.hasPrefix "~/" str then
+      repl + lib.removePrefix "~" str
+    else if str == "~" then
+      repl
+    else
+      str;
 
   # Renders a path for emission inside an SBPL string literal.
   # - Plain string: canonicalize the macOS symlinks (/tmp, /var, /etc)
@@ -130,10 +135,12 @@ let
   #   placeholder (wrapper sed-substitutes it), then SBPL-escape.
   #   Canonicalization is skipped because ~/... always resolves under
   #   /Users/<user>, which has no /tmp /var /etc prefix overlap.
-  renderSbplPath = path:
-    if isNoEscape path
-    then sbplEscape (expandLeadingTilde "__JAIL_HOME__" path._noescape)
-    else sbplEscape (canonicalizePath path);
+  renderSbplPath =
+    path:
+    if isNoEscape path then
+      sbplEscape (expandLeadingTilde "__JAIL_HOME__" path._noescape)
+    else
+      sbplEscape (canonicalizePath path);
 
   # Renders a path for emission inside a double-quoted shell argument
   # in a preflight snippet.
@@ -142,10 +149,8 @@ let
   # - noescape value: replace leading ~ with literal `$HOME`. Bash
   #   expands `$HOME` even inside "..." quoting, so the resulting
   #   `"$HOME/x"` string interpolates correctly at preflight time.
-  renderShellPath = path:
-    if isNoEscape path
-    then expandLeadingTilde "$HOME" path._noescape
-    else canonicalizePath path;
+  renderShellPath =
+    path: if isNoEscape path then expandLeadingTilde "$HOME" path._noescape else canonicalizePath path;
 
   # The ADR-0004 curated prelude: the minimum SBPL allows that make a
   # `(deny default)` jail usable for any process at all. Discovered in
@@ -220,16 +225,25 @@ let
   # stops `ln` from descending into an existing symlinked-directory at
   # dst and creating the new link inside it. Used by every bind-style
   # combinator (ro-bind, rw-bind, later write-text / try-* variants).
-  bindPreflight = src: dst:
-    lib.optional (resolvePath src != resolvePath dst)
-      (let
+  bindPreflight =
+    src: dst:
+    lib.optional (resolvePath src != resolvePath dst) (
+      let
         srcShell = renderShellPath src;
         dstShell = renderShellPath dst;
-      in ''mkdir -p "${dirOf dstShell}" && ln -sfn "${srcShell}" "${dstShell}"'');
+      in
+      ''mkdir -p "${dirOf dstShell}" && ln -sfn "${srcShell}" "${dstShell}"''
+    );
 
   combinators = {
-    set-env = key: value:
-      emptySlice // { env = { ${key} = value; }; };
+    set-env =
+      key: value:
+      emptySlice
+      // {
+        env = {
+          ${key} = value;
+        };
+      };
 
     # Exposes the system timezone to the jailed process. On macOS the kernel-
     # canonical paths are /private/etc/localtime (a symlink to the active
@@ -290,9 +304,13 @@ let
     # rule allows the kernel-canonical form of `src` — the kernel
     # resolves any symlink at `dst` before applying the rule, so the
     # allow lands on the resolved path (spike 10 F1).
-    ro-bind = src: dst:
-      let rendered = renderSbplPath src;
-      in emptySlice // {
+    ro-bind =
+      src: dst:
+      let
+        rendered = renderSbplPath src;
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${rendered}"))
           (allow process-exec (subpath "${rendered}"))
@@ -306,9 +324,13 @@ let
     # symlink-preflight when src≠dst, same noescape support — and
     # emits an additional file-write* allow on the same subpath. Per
     # spike 10 F5 write rules are symmetric with read rules.
-    rw-bind = src: dst:
-      let rendered = renderSbplPath src;
-      in emptySlice // {
+    rw-bind =
+      src: dst:
+      let
+        rendered = renderSbplPath src;
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${rendered}"))
           (allow file-write* (subpath "${rendered}"))
@@ -369,11 +391,14 @@ let
     # the same path — the user opts into this destruction by naming
     # the directory tmpfs; the wrapper (slice 11) runs cleanup
     # snippets in reverse-of-merge order on EXIT/INT/TERM via trap.
-    tmpfs = path:
+    tmpfs =
+      path:
       let
         sbplPath = renderSbplPath path;
         shellPath = renderShellPath path;
-      in emptySlice // {
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${sbplPath}"))
           (allow file-write* (subpath "${sbplPath}"))
@@ -394,11 +419,14 @@ let
     # HITL 2026-06-19 surfaced this when a second `nix run #claude`
     # invocation hit "JSON Parse error: Unexpected EOF" because the
     # prior run's _cleanup trap had rm-rf'd the entire cfgDir.
-    ensure-dir = path:
+    ensure-dir =
+      path:
       let
         sbplPath = renderSbplPath path;
         shellPath = renderShellPath path;
-      in emptySlice // {
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${sbplPath}"))
           (allow file-write* (subpath "${sbplPath}"))
@@ -425,11 +453,14 @@ let
     # Nix's GC; the symlink is on the host filesystem and must be
     # torn down to preserve the Linux jail-nix tmpfs ephemerality
     # when write-text is used inside a tmpfs.
-    write-text = path: content:
+    write-text =
+      path: content:
       let
         storePath = builtins.toFile "jail-write-text" content;
         shellPath = renderShellPath path;
-      in emptySlice // {
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (literal "${storePath}"))
           (allow process-exec (literal "${storePath}"))
@@ -446,9 +477,13 @@ let
     # to bwrap's `--bind-try` no-op semantics. No preflight (we don't
     # want to create the file/dir; only expose it if it already
     # exists), no cleanup (we don't own the path's lifecycle).
-    try-readwrite = path:
-      let rendered = renderSbplPath path;
-      in emptySlice // {
+    try-readwrite =
+      path:
+      let
+        rendered = renderSbplPath path;
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${rendered}"))
           (allow file-write* (subpath "${rendered}"))
@@ -462,8 +497,7 @@ let
     # value: try-fwd-env says "pass through whatever the host has,
     # if anything". The wrapper (slice 11) iterates envForward at
     # exec time and emits `--setenv` args only for set vars.
-    try-fwd-env = name:
-      emptySlice // { envForward = [ name ]; };
+    try-fwd-env = name: emptySlice // { envForward = [ name ]; };
 
     # Grants read access to a host path whose canonical target is only
     # knowable at wrapper runtime — the canonical case is an /etc symlink
@@ -495,16 +529,16 @@ let
     # emits the slice on every platform, but only the darwin wrapper
     # consumes `hostResolve`. The bare allow on the unsubstituted
     # placeholder string on Linux is a no-op (bwrap doesn't apply SBPL).
-    host-resolve = path:
+    host-resolve =
+      path:
       let
         upper = lib.toUpper path;
-        sanitisedRaw = builtins.replaceStrings
-          [ "/" "." "-" " " ":" ]
-          [ "_" "_" "_" "_" "_" ]
-          upper;
+        sanitisedRaw = builtins.replaceStrings [ "/" "." "-" " " ":" ] [ "_" "_" "_" "_" "_" ] upper;
         key = lib.removePrefix "_" sanitisedRaw;
         placeholder = "__JAIL_HOST_RESOLVE_${key}__";
-      in emptySlice // {
+      in
+      emptySlice
+      // {
         sbpl = ''
           (allow file-read* (subpath "${placeholder}"))
         '';
@@ -529,7 +563,8 @@ let
     # paths under /nix/store that aren't part of the agent's closure
     # remain invisible. The trade-off is that nix flake check pays
     # for one closureInfo build per template.
-    add-pkg-deps = pkgList:
+    add-pkg-deps =
+      pkgList:
       let
         closureInfo = pkgs.closureInfo { rootPaths = pkgList; };
         rawPaths = builtins.readFile "${closureInfo}/store-paths";
@@ -544,7 +579,9 @@ let
           (allow file-read* (subpath "${path}"))
           (allow process-exec (subpath "${path}"))
         '') closurePaths;
-      in emptySlice // {
+      in
+      emptySlice
+      // {
         sbpl = sbplLines;
         binPaths = map (pkg: "${pkg}/bin") pkgList;
       };
@@ -584,7 +621,8 @@ let
   # and the caller's combinators, so a caller-supplied combinator can
   # still override (last-match-wins). binPaths is NOT extended; PATH
   # ordering remains the caller's business via explicit add-pkg-deps.
-  jail = name: pkg: combinatorList:
+  jail =
+    name: pkg: combinatorList:
     let
       mainBinAllows = (combinators.add-pkg-deps [ pkg ]).sbpl;
       merged = lib.foldl' mergeSlices emptySlice combinatorList;
@@ -596,14 +634,28 @@ let
       '';
       drv = pkgs.writeShellScriptBin name placeholderScript;
     in
-      drv // {
-        jailData = {
-          sbpl = sbplFragment;
-          inherit (merged) preflight cleanup env envForward binPaths hostResolve;
-          mainBin = lib.getExe pkg;
-        };
+    drv
+    // {
+      jailData = {
+        sbpl = sbplFragment;
+        inherit (merged)
+          preflight
+          cleanup
+          env
+          envForward
+          binPaths
+          hostResolve
+          ;
+        mainBin = lib.getExe pkg;
       };
+    };
 in
 {
-  inherit emptySlice mergeSlices combinators prelude jail;
+  inherit
+    emptySlice
+    mergeSlices
+    combinators
+    prelude
+    jail
+    ;
 }

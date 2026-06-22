@@ -10,63 +10,63 @@
   setupLinux,
 }:
 pkgs.runCommand "setup-linux-app-tests" { } ''
-  set -eu
-  fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+    set -eu
+    fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-  report="$(${setupLinux}/bin/setup-linux 2>&1)" && status=0 || status=$?
+    report="$(${setupLinux}/bin/setup-linux 2>&1)" && status=0 || status=$?
 
-  [ "$status" -eq 0 ] || [ "$status" -eq 1 ] \
-    || fail "check mode must exit 0 or 1, got $status; output:
-$report"
+    [ "$status" -eq 0 ] || [ "$status" -eq 1 ] \
+      || fail "check mode must exit 0 or 1, got $status; output:
+  $report"
 
-  for label in "systemd" "cgroup v2" "auditd" "sudoers" "user namespaces" "SELinux"; do
-    case "$report" in
-      *"$label"*) ;;
-      *) fail "report missing '$label' line; output:
-$report" ;;
+    for label in "systemd" "cgroup v2" "auditd" "sudoers" "user namespaces" "SELinux"; do
+      case "$report" in
+        *"$label"*) ;;
+        *) fail "report missing '$label' line; output:
+  $report" ;;
+      esac
+    done
+
+    # --help describes every mode and exits 0.
+    help_out="$(${setupLinux}/bin/setup-linux --help 2>&1)" && status=0 || status=$?
+    [ "$status" -eq 0 ] || fail "--help should exit 0, got $status"
+    for flag in --apply --remove; do
+      case "$help_out" in
+        *"$flag"*) ;;
+        *) fail "--help should mention $flag; got:
+  $help_out" ;;
+      esac
+    done
+
+    # An unknown argument is rejected.
+    ${setupLinux}/bin/setup-linux --bogus >/dev/null 2>&1 && status=0 || status=$?
+    [ "$status" -ne 0 ] || fail "unknown argument should exit nonzero"
+
+    # apply mode is fail-safe: declining the confirmation makes no changes and
+    # exits 0. (The build sandbox is unconfigured, so the plan is non-empty and
+    # the prompt is reached; feeding 'n' must abort cleanly.)
+    apply_out="$(printf 'n\n' | ${setupLinux}/bin/setup-linux --apply 2>&1)" \
+      && status=0 || status=$?
+    [ "$status" -eq 0 ] || fail "declining --apply should exit 0, got $status; output:
+  $apply_out"
+    case "$apply_out" in
+      *[Aa]borted*) ;;
+      *) fail "declining --apply should report it aborted; got:
+  $apply_out" ;;
     esac
-  done
+    [ ! -e /etc/sudoers.d/sandboxed ] || fail "declining --apply must not create the sudoers drop-in"
 
-  # --help describes every mode and exits 0.
-  help_out="$(${setupLinux}/bin/setup-linux --help 2>&1)" && status=0 || status=$?
-  [ "$status" -eq 0 ] || fail "--help should exit 0, got $status"
-  for flag in --apply --remove; do
-    case "$help_out" in
-      *"$flag"*) ;;
-      *) fail "--help should mention $flag; got:
-$help_out" ;;
+    # remove mode on a fully-clean host (build sandbox) is a no-op that exits 0
+    # without prompting — there's nothing to remove. This is the idempotency
+    # contract: running --remove twice is safe.
+    remove_out="$(${setupLinux}/bin/setup-linux --remove 2>&1)" && status=0 || status=$?
+    [ "$status" -eq 0 ] || fail "--remove on a clean host should exit 0, got $status; output:
+  $remove_out"
+    case "$remove_out" in
+      *"nothing to remove"*) ;;
+      *) fail "--remove on a clean host should report 'nothing to remove'; got:
+  $remove_out" ;;
     esac
-  done
 
-  # An unknown argument is rejected.
-  ${setupLinux}/bin/setup-linux --bogus >/dev/null 2>&1 && status=0 || status=$?
-  [ "$status" -ne 0 ] || fail "unknown argument should exit nonzero"
-
-  # apply mode is fail-safe: declining the confirmation makes no changes and
-  # exits 0. (The build sandbox is unconfigured, so the plan is non-empty and
-  # the prompt is reached; feeding 'n' must abort cleanly.)
-  apply_out="$(printf 'n\n' | ${setupLinux}/bin/setup-linux --apply 2>&1)" \
-    && status=0 || status=$?
-  [ "$status" -eq 0 ] || fail "declining --apply should exit 0, got $status; output:
-$apply_out"
-  case "$apply_out" in
-    *[Aa]borted*) ;;
-    *) fail "declining --apply should report it aborted; got:
-$apply_out" ;;
-  esac
-  [ ! -e /etc/sudoers.d/sandboxed ] || fail "declining --apply must not create the sudoers drop-in"
-
-  # remove mode on a fully-clean host (build sandbox) is a no-op that exits 0
-  # without prompting — there's nothing to remove. This is the idempotency
-  # contract: running --remove twice is safe.
-  remove_out="$(${setupLinux}/bin/setup-linux --remove 2>&1)" && status=0 || status=$?
-  [ "$status" -eq 0 ] || fail "--remove on a clean host should exit 0, got $status; output:
-$remove_out"
-  case "$remove_out" in
-    *"nothing to remove"*) ;;
-    *) fail "--remove on a clean host should report 'nothing to remove'; got:
-$remove_out" ;;
-  esac
-
-  touch "$out"
+    touch "$out"
 ''

@@ -15,7 +15,11 @@
 # In concrete mode (template caller with projectName = "<name>") the
 # launcher hard-codes the name at Nix-eval time and carries no
 # placeholder-mode bash dance.
-{ pkgs, lib, self }:
+{
+  pkgs,
+  lib,
+  self,
+}:
 let
   slop = self.lib.slopEnv pkgs;
   placeholderBins = slop.mkBins { };
@@ -25,8 +29,7 @@ let
   # can grep its allow rules directly. The wrapper does the same
   # writeText internally at build time; we re-emit it here for
   # standalone inspection.
-  placeholderSbpl = pkgs.writeText "darwin-apps-jail-sbpl"
-    placeholderBins.jailedAgent.jailData.sbpl;
+  placeholderSbpl = pkgs.writeText "darwin-apps-jail-sbpl" placeholderBins.jailedAgent.jailData.sbpl;
 
   # First per-jail wrapper: sandboxed-jailed-claude. Carries the
   # rendered preflight/cleanup blocks slices 1+2 + 5b touch.

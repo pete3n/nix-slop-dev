@@ -60,21 +60,35 @@ let
             id = "qwen3-coder:latest";
             name = "Qwen3 Coder (Local)";
             reasoning = false;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            cost = {
+              input = 0;
+              output = 0;
+              cacheRead = 0;
+              cacheWrite = 0;
+            };
           }
           {
             id = "gemma3:latest";
             name = "Gemma3 (Local)";
             reasoning = false;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            cost = {
+              input = 0;
+              output = 0;
+              cacheRead = 0;
+              cacheWrite = 0;
+            };
           }
         ];
       };
     };
   };
 
-  contextOf = { agentMdFile, rulesDir }:
-    shared.mkContextMd { contextMdFile = agentMdFile; inherit rulesDir; };
+  contextOf =
+    { agentMdFile, rulesDir }:
+    shared.mkContextMd {
+      contextMdFile = agentMdFile;
+      inherit rulesDir;
+    };
 
   # Shared jail combinator list. `jailC` is jail.combinators (same access path
   # on both platforms); `envSrc` is the /usr/bin/env source (coreutils on
@@ -83,20 +97,21 @@ let
   # and Darwin jails cannot drift. The Linux value is byte-identical to the
   # original inline list (tests/template-pi-agent-drv.expected).
   mkPiCombinators =
-    { jailC
-    , lib
-    , pkgs
-    , envSrc
-    , extra ? [ ]
-    , projectName
-    , skillsDir
-    , agentMdFile
-    , rulesDir
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
+    {
+      jailC,
+      lib,
+      pkgs,
+      envSrc,
+      extra ? [ ],
+      projectName,
+      skillsDir,
+      agentMdFile,
+      rulesDir,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
     }:
     let
       contextMd = contextOf { inherit agentMdFile rulesDir; };
@@ -188,27 +203,46 @@ in
 
   # --- Linux (bwrap) builder ---
   mkLinuxBins =
-    { projectName
-    , rulesDir
-    , skillsDir
-    , agentMdFile
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
-    , extraShellHook
-    , extraSandboxedEnvForwards
-    , engine
+    {
+      projectName,
+      rulesDir,
+      skillsDir,
+      agentMdFile,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
+      extraShellHook,
+      extraSandboxedEnvForwards,
+      engine,
     }:
     let
-      inherit (engine) pkgs lib jail sandboxed prereqGuidance projectNamePlaceholder;
+      inherit (engine)
+        pkgs
+        lib
+        jail
+        sandboxed
+        prereqGuidance
+        projectNamePlaceholder
+        ;
       usesPlaceholder = projectName == projectNamePlaceholder;
 
       piCombinators = mkPiCombinators {
         jailC = jail.combinators;
-        inherit lib pkgs projectName skillsDir agentMdFile rulesDir enableLocalAi
-          basePkgs projectPkgs projectEnv extraCombinators;
+        inherit
+          lib
+          pkgs
+          projectName
+          skillsDir
+          agentMdFile
+          rulesDir
+          enableLocalAi
+          basePkgs
+          projectPkgs
+          projectEnv
+          extraCombinators
+          ;
         envSrc = "${pkgs.coreutils}/bin/env";
         extra = [ ];
       };
@@ -251,31 +285,37 @@ in
       '';
 
       pi = pkgs.writeShellScriptBin "pi" (
-        if usesPlaceholder then ''
-          set -euo pipefail
-          ${placeholderPreamble "${jailedPi}/bin/jailed-pi"}
-          ${sandboxedInvocation ''"$SLOP_LAUNCHER"''}
-        '' else ''
-          set -euo pipefail
-          ${preamble}
-          ${sandboxedInvocation "${jailedPi}/bin/jailed-pi"}
-        ''
+        if usesPlaceholder then
+          ''
+            set -euo pipefail
+            ${placeholderPreamble "${jailedPi}/bin/jailed-pi"}
+            ${sandboxedInvocation ''"$SLOP_LAUNCHER"''}
+          ''
+        else
+          ''
+            set -euo pipefail
+            ${preamble}
+            ${sandboxedInvocation "${jailedPi}/bin/jailed-pi"}
+          ''
       );
 
       jail-shell = pkgs.writeShellScriptBin "jail-shell" (
-        if usesPlaceholder then ''
-          set -euo pipefail
-          ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
-          exec ${sandboxed}/bin/sandboxed -q \
-            -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
-            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
-        '' else ''
-          set -euo pipefail
-          ${preamble}
-          exec ${sandboxed}/bin/sandboxed -q \
-            -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
-            ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- ${jailedShell}/bin/jailed-shell "$@"
-        ''
+        if usesPlaceholder then
+          ''
+            set -euo pipefail
+            ${placeholderPreamble "${jailedShell}/bin/jailed-shell"}
+            exec ${sandboxed}/bin/sandboxed -q \
+              -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
+              ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+          ''
+        else
+          ''
+            set -euo pipefail
+            ${preamble}
+            exec ${sandboxed}/bin/sandboxed -q \
+              -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- \
+              ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- ${jailedShell}/bin/jailed-shell "$@"
+          ''
       );
 
       localShellHook = lib.optionalString enableLocalAi ''
@@ -289,42 +329,50 @@ in
       '';
 
       shellHook = # sh
-        ''
-          # Per-project state (sessions/scratch/exchange); ~/.pi/agent is global.
-          ${preamble}
+      ''
+        # Per-project state (sessions/scratch/exchange); ~/.pi/agent is global.
+        ${preamble}
 
-          # Setup checks
-          _setup_ok=1
-          ${prereqGuidance}/bin/slop-prereq-guidance || _setup_ok=0
+        # Setup checks
+        _setup_ok=1
+        ${prereqGuidance}/bin/slop-prereq-guidance || _setup_ok=0
 
-          if [ ! -s "$HOME/.pi/agent/auth.json" ]; then
-          	printf '\033[1;36mℹ Pi credentials not found.\033[0m\n'
-          	printf '  Run pi and use /login (or export ANTHROPIC_API_KEY) on first use.\n\n'
-          	_setup_ok=0
-          fi
+        if [ ! -s "$HOME/.pi/agent/auth.json" ]; then
+        	printf '\033[1;36mℹ Pi credentials not found.\033[0m\n'
+        	printf '  Run pi and use /login (or export ANTHROPIC_API_KEY) on first use.\n\n'
+        	_setup_ok=0
+        fi
 
-          if [ "$_setup_ok" -eq 1 ]; then
-          	printf '\033[1;32m✓\033[0m Jailed pi ready. Run \033[1mpi\033[0m to start.\n'
-          fi
-          printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
+        if [ "$_setup_ok" -eq 1 ]; then
+        	printf '\033[1;32m✓\033[0m Jailed pi ready. Run \033[1mpi\033[0m to start.\n'
+        fi
+        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${
+          lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
+        }
 
-          # Jailed Pi
-          pi() {
-          	mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
-          	_pi_extra_e=""
-          	[ -n "''${ANTHROPIC_API_KEY:-}" ] && _pi_extra_e="-e ANTHROPIC_API_KEY"
-          	${sandboxed}/bin/sandboxed -q ${hosts} \
-          		-e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK \
-          		$_pi_extra_e ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}\
-          		${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-pi "$@"
-          }
-          alias jail-shell="${sandboxed}/bin/sandboxed -q -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-shell"
-        '' + localShellHook;
+        # Jailed Pi
+        pi() {
+        	mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
+        	_pi_extra_e=""
+        	[ -n "''${ANTHROPIC_API_KEY:-}" ] && _pi_extra_e="-e ANTHROPIC_API_KEY"
+        	${sandboxed}/bin/sandboxed -q ${hosts} \
+        		-e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK \
+        		$_pi_extra_e ${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}\
+        		${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-pi "$@"
+        }
+        alias jail-shell="${sandboxed}/bin/sandboxed -q -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK -- ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- jailed-shell"
+      ''
+      + localShellHook;
     in
     {
       agent = pi;
       jailedAgent = jailedPi;
-      inherit jail-shell jailedShell sandboxedPackages shellHook;
+      inherit
+        jail-shell
+        jailedShell
+        sandboxedPackages
+        shellHook
+        ;
     };
 
   # --- Darwin (Seatbelt) builder ---
@@ -334,21 +382,28 @@ in
   # /usr/bin/security keychain bind (Pi auth lives in auth.json), and no
   # prereq/auditd checks (Seatbelt is daemonless). Concrete projectName only.
   mkDarwinBins =
-    { projectName
-    , rulesDir
-    , skillsDir
-    , agentMdFile
-    , enableLocalAi
-    , basePkgs
-    , projectPkgs
-    , projectEnv
-    , extraCombinators
-    , extraShellHook
-    , extraSandboxedEnvForwards
-    , engine
+    {
+      projectName,
+      rulesDir,
+      skillsDir,
+      agentMdFile,
+      enableLocalAi,
+      basePkgs,
+      projectPkgs,
+      projectEnv,
+      extraCombinators,
+      extraShellHook,
+      extraSandboxedEnvForwards,
+      engine,
     }:
     let
-      inherit (engine) pkgs lib jail sandboxed projectNamePlaceholder;
+      inherit (engine)
+        pkgs
+        lib
+        jail
+        sandboxed
+        projectNamePlaceholder
+        ;
       usesPlaceholder = projectName == projectNamePlaceholder;
 
       jailC = jail.combinators;
@@ -367,8 +422,20 @@ in
       ];
 
       piCombinators = mkPiCombinators {
-        inherit jailC lib pkgs projectName skillsDir agentMdFile rulesDir enableLocalAi
-          basePkgs projectPkgs projectEnv extraCombinators;
+        inherit
+          jailC
+          lib
+          pkgs
+          projectName
+          skillsDir
+          agentMdFile
+          rulesDir
+          enableLocalAi
+          basePkgs
+          projectPkgs
+          projectEnv
+          extraCombinators
+          ;
         # SIP keeps /usr/bin read-only; src == dst so the read-allow emits with
         # no bind preflight.
         envSrc = "/usr/bin/env";
@@ -387,7 +454,10 @@ in
         jail = jailedShell;
         binName = "sandboxed-jailed-shell";
       };
-      sandboxedPackages = [ sandboxedPi sandboxedShell ];
+      sandboxedPackages = [
+        sandboxedPi
+        sandboxedShell
+      ];
 
       # Concrete (template) vs zero-touch (apps) config setup. On Darwin the
       # per-jail wrapper does the SBPL projectName substitution itself, so the
@@ -447,12 +517,20 @@ in
         if [ "$_setup_ok" -eq 1 ]; then
         	printf '\033[1;32m✓\033[0m Jailed pi ready. Run \033[1mpi\033[0m to start.\n'
         fi
-        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${lib.optionalString (extraShellHook != "") "\n${extraShellHook}"}
-      '' + localShellHook;
+        printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${
+          lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
+        }
+      ''
+      + localShellHook;
     in
     {
       agent = pi;
       jailedAgent = jailedPi;
-      inherit jail-shell jailedShell sandboxedPackages shellHook;
+      inherit
+        jail-shell
+        jailedShell
+        sandboxedPackages
+        shellHook
+        ;
     };
 }

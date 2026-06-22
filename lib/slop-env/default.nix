@@ -1,10 +1,11 @@
-{ pkgs
-, sandboxed
-, prereqGuidance ? null
-, claude-pkg
-, pi-pkg
-, opencode-pkg
-, jail
+{
+  pkgs,
+  sandboxed,
+  prereqGuidance ? null,
+  claude-pkg,
+  pi-pkg,
+  opencode-pkg,
+  jail,
 }:
 
 # Slop Env construction library — entry point.
@@ -47,9 +48,26 @@ let
 
   perOs =
     if pkgs.stdenv.isDarwin then
-      import ./darwin.nix { inherit pkgs sandboxed jail shared; defaultProfile = claudeProfile; }
+      import ./darwin.nix {
+        inherit
+          pkgs
+          sandboxed
+          jail
+          shared
+          ;
+        defaultProfile = claudeProfile;
+      }
     else
-      import ./linux.nix { inherit pkgs sandboxed prereqGuidance jail shared; defaultProfile = claudeProfile; };
+      import ./linux.nix {
+        inherit
+          pkgs
+          sandboxed
+          prereqGuidance
+          jail
+          shared
+          ;
+        defaultProfile = claudeProfile;
+      };
 in
 {
   inherit (perOs) mkShell mkBins;
