@@ -85,16 +85,18 @@ jobs:
       # as a warm base on a rotated key, so only the delta rebuilds — never a
       # cold 15m. (packages/** and tests/** use `**`, not `*.nix`, to catch the
       # .go/.sh build inputs under them.)
-      # The `v2` epoch is a manual cache-flush knob. GitHub cache keys are
+      # The `vN` epoch is a manual cache-flush knob. GitHub cache keys are
       # immutable, so when the SAVE strategy changes (not the inputs) the old
       # cache under an unchanged key would be restored and re-saved forever.
-      # Bump this token to force a one-time miss + fresh save. v2 flushes the
-      # pre-GC-root caches (saved by the blind size-cap GC, truncated and
-      # missing the runtime outputs) so the first run re-saves a complete,
-      # GC-rooted runtime closure (see the "Pin check closures" step below).
+      # Bump this token to force a one-time miss + fresh save.
+      #   v2: introduced GC-rooting of the check closures (flushed the blind
+      #       size-cap caches that dropped runtime outputs).
+      #   v3: also roots `packages.*` so hunk's bun2nix output persists (v2
+      #       rooted only checks, so hunk was still evicted + rebuilt).
+      # See the "Pin check + package closures" step below.
       - uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.system }}-v2-${{ hashFiles('flake.lock', 'flake.nix', 'lib/**', 'packages/**', 'modules/**', 'tests/**', 'templates/**/flake.nix') }}
+          primary-key: nix-${{ matrix.system }}-v3-${{ hashFiles('flake.lock', 'flake.nix', 'lib/**', 'packages/**', 'modules/**', 'tests/**', 'templates/**/flake.nix') }}
           restore-prefixes-first-match: nix-${{ matrix.system }}-
           # GitHub gives 10 GB/repo and evicts LRU; bound what we save and
           # sweep stale caches so we don't thrash that budget.
@@ -124,14 +126,26 @@ jobs:
       # derivations every run.
       #
       # `nix build --out-link` registers an indirect GC root, and the action's
-      # GC never deletes live paths — so rooting every check's output closure
-      # leaves the GC able to trim only the unrooted build-time deps, producing
-      # a small, COMPLETE runtime-closure cache. The realize is instant (the
-      # paths were just built by flake check). attrNames does not force the
-      # check values, so the eval is cheap.
-      - name: Pin check closures as GC roots (keep runtime paths, drop build deps)
+      # GC never deletes live paths — so rooting the output closures leaves the
+      # GC able to trim only the unrooted build-time deps, producing a small,
+      # COMPLETE runtime-closure cache. The realize is instant (the paths were
+      # just built by flake check). attrNames does not force the attr values, so
+      # the eval is cheap.
+      #
+      # Root BOTH checks AND packages. `checks.*` captures the agent launchers
+      # (opencode/pi/claude, via the apps-*-scratch-exchange checks), but the
+      # heaviest non-substitutable build — hunk (a bun2nix `bun build --compile`
+      # of a multi-platform node_modules: the bun-windows-*/binding-win32-*/
+      # core-darwin-* swarm, ~14 min) — is a `package` pulled into templates via
+      # projectPkgs, NOT in any check's runtime closure. Without rooting
+      # packages, hunk's output is evicted and rebuilt every run. opencode is a
+      # prebuilt-binary download so it is cheap regardless.
+      - name: Pin check + package closures as GC roots (keep runtime paths, drop build deps)
         run: |
           mkdir -p .gcroots
           nix build -L --keep-going --out-link .gcroots/check \
             $(nix eval --raw ".#checks.${{ matrix.system }}" --apply \
               'cs: builtins.concatStringsSep " " (map (name: ".#checks.${{ matrix.system }}." + name) (builtins.attrNames cs))')
+          nix build -L --keep-going --out-link .gcroots/pkg \
+            $(nix eval --raw ".#packages.${{ matrix.system }}" --apply \
+              'ps: builtins.concatStringsSep " " (map (name: ".#packages.${{ matrix.system }}." + name) (builtins.attrNames ps))')
