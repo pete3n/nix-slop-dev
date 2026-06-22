@@ -66,20 +66,35 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
-      # Persist the Nix store across runs. hunk (a third-party bun2nix build)
-      # is the only heavy, non-substitutable derivation the gate builds — with
-      # no binary cache for it (its nix-community Cachix build is keyed to
-      # hunk's own nixos-unstable, but we pin it to ours via follows), it
-      # would rebuild from source (npm fetch + `bun build --compile`, ~14m on
-      # ubuntu-latest) on every PR. Keying on flake.lock means code-only PRs
-      # restore the full closure (hunk included) exactly; the store is only
-      # rebuilt when an input pin actually moves. restore-prefixes-first-match
-      # still recovers most of the store (incl. hunk, which depends on
-      # flake.lock not our .nix) on a lock bump, so worst case is a partial
-      # rebuild rather than a cold 14m.
+      # Persist the Nix store across runs. The heavy, non-substitutable builds
+      # the gate realises (hunk + opencode, both third-party bun2nix builds;
+      # the nvim template's gen-luarc IFD closure) would otherwise rebuild from
+      # source (~15m+ on ubuntu-latest) on every PR.
+      #
+      # The key MUST hash our build-defining sources, not just flake.lock.
+      # GitHub cache keys are immutable, so a key only ever stores the closure
+      # of the FIRST run that created it. opencode proved why flake.lock alone
+      # is wrong: it is pulled from the already-locked llm-agents input, so
+      # adding it was a `.nix` change with NO lock bump — the flake.lock key did
+      # not rotate, the pre-opencode cache kept being restored, and the post-run
+      # save was skipped (primary-key hit on an immutable key), so opencode
+      # cold-built on EVERY run forever. Hashing flake.nix + lib + packages +
+      # modules + tests + the template flakes rotates the key whenever the build
+      # set can change, so a fresh, complete cache is saved each time.
+      # restore-prefixes-first-match still restores the most recent older cache
+      # as a warm base on a rotated key, so only the delta rebuilds — never a
+      # cold 15m. (packages/** and tests/** use `**`, not `*.nix`, to catch the
+      # .go/.sh build inputs under them.)
+      # The `v2` epoch is a manual cache-flush knob. GitHub cache keys are
+      # immutable, so when the SAVE strategy changes (not the inputs) the old
+      # cache under an unchanged key would be restored and re-saved forever.
+      # Bump this token to force a one-time miss + fresh save. v2 flushes the
+      # pre-GC-root caches (saved by the blind size-cap GC, truncated and
+      # missing the runtime outputs) so the first run re-saves a complete,
+      # GC-rooted runtime closure (see the "Pin check closures" step below).
       - uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.system }}-${{ hashFiles('flake.lock') }}
+          primary-key: nix-${{ matrix.system }}-v2-${{ hashFiles('flake.lock', 'flake.nix', 'lib/**', 'packages/**', 'modules/**', 'tests/**', 'templates/**/flake.nix') }}
           restore-prefixes-first-match: nix-${{ matrix.system }}-
           # GitHub gives 10 GB/repo and evicts LRU; bound what we save and
           # sweep stale caches so we don't thrash that budget.
@@ -92,6 +107,31 @@ jobs:
 
       # Builds every derivation under `checks.${system}` for this runner's
       # system and cross-evaluates the others, failing on the first eval or
-      # build regression. Does NOT touch `hydraJobs` (custom output).
+      # build regression. Does NOT touch `functionalTests` (non-standard output).
       - name: nix flake check
         run: nix flake check -L
+
+      # Pin the check closures as GC roots before the post-run cache save.
+      #
+      # After `nix flake check` the store is dominated by build-time-only deps:
+      # opencode's + hunk's bun2nix node_modules (one path per npm package,
+      # incl. cross-platform bun-pkg-* / core-darwin-x64), our per-check jail
+      # derivations, and source tarballs. On x86_64 that's ~57 GB, versus a
+      # ~3-5 GB *runtime* closure (aarch64, which restores a complete cache and
+      # rebuilds only ~28 derivations, proves the runtime closure is small).
+      # cache-nix-action's gc-max-store-size GC trims by LRU, not reachability,
+      # so it evicted the runtime outputs and x86_64 cold-rebuilt ~986
+      # derivations every run.
+      #
+      # `nix build --out-link` registers an indirect GC root, and the action's
+      # GC never deletes live paths — so rooting every check's output closure
+      # leaves the GC able to trim only the unrooted build-time deps, producing
+      # a small, COMPLETE runtime-closure cache. The realize is instant (the
+      # paths were just built by flake check). attrNames does not force the
+      # check values, so the eval is cheap.
+      - name: Pin check closures as GC roots (keep runtime paths, drop build deps)
+        run: |
+          mkdir -p .gcroots
+          nix build -L --keep-going --out-link .gcroots/check \
+            $(nix eval --raw ".#checks.${{ matrix.system }}" --apply \
+              'cs: builtins.concatStringsSep " " (map (name: ".#checks.${{ matrix.system }}." + name) (builtins.attrNames cs))')
