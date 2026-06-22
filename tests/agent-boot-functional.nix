@@ -1,47 +1,65 @@
-# Functional test for AGENT BOOT under the real Sandbox+Jail — ADR-0006.
+# Functional test for AGENT BOOT under the real bwrap Jail — ADR-0006.
 #
 # The sibling sandbox/jail functional tests drive a jailed *bash* + the oracle:
 # they prove the network and filesystem BOUNDARIES, but never launch the actual
-# agents. That gap is exactly what let the opencode regression ship — opencode
-# writes ~/.config/opencode/.gitignore during Config.loadInstanceState at boot,
-# the read-only config dir denied it (EPERM), and nothing in CI booted opencode
-# to notice. This test closes the bwrap half of that gap (the macOS harness,
-# ci/macos-functional.sh, covers the Seatbelt half).
+# agent. That gap is what let the opencode regression ship — opencode writes
+# ~/.config/opencode/.gitignore during Config.loadInstanceState at boot, the
+# read-only config dir denied it (EPERM), and nothing in CI booted opencode to
+# notice. This closes the bwrap half of that gap (ci/macos-functional.sh's
+# boot_check covers the Seatbelt half, for all three agents).
 #
-# It runs each REAL `.agent` launcher (the same path as `nix run .#<agent>`:
-# preamble -> sandboxed -> bwrap jail -> agent) far enough to reach the agent's
-# config bootstrap, where it writes into its own config dir. The VM is hermetic
-# (no upstream), so each agent boots, fails the eventual model call, and exits —
-# we assert only that the JAIL never denied a config-dir write.
+# Scope = opencode only, and the JAILED binary directly (not the `.agent`
+# launcher):
+#   - The bug is opencode's; it lives in the bwrap mount view, NOT the network
+#     Sandbox. Driving `jailed-opencode` isolates exactly that layer, mirroring
+#     tests/jail-functional.nix ("the raw jail launcher directly, isolated from
+#     the Sandbox/sudo machinery").
+#   - The full `.agent` launcher wraps `sandboxed`, which DNS-resolves its
+#     --allow hosts at launch. A nixosTest is hermetic (no upstream), so that
+#     resolution fails before the agent ever boots — the launcher can't run
+#     here at all.
+#   - claude/pi boot-coverage stays in the macOS harness: replicating their
+#     launcher preambles (claude's .claude.json/.credentials bootstrap, pi's
+#     session-dir env) host-side here is fragile and would risk non-bug
+#     failures. Their config dirs are already writable, so opencode is the
+#     case that actually exercises this regression on bwrap.
 #
-# NEGATIVE assertion (matches ci/macos-functional.sh boot_check): a FAIL means a
-# filesystem write-denial signature appeared; an auth/network error does not
-# match and cannot false-FAIL. The residual risk is a false-PASS if a launcher
-# aborts BEFORE config bootstrap — the full per-agent log is printed so the
-# first CI run reveals where boot actually got to (a model/network error in the
-# tail = bootstrap was reached). opencode is the regressed case; claude and pi
-# are regression guards (their config dirs are already writable), so they should
-# be green today and only flip if a future change makes a config dir read-only.
+# The VM is hermetic, so opencode boots, writes its config-dir .gitignore, then
+# fails the eventual model call and exits. NEGATIVE assertion (matches the macOS
+# boot_check): a FAIL means a write-denial signature appeared; the model/network
+# error does not match and cannot false-FAIL. Residual risk is a false-PASS if
+# opencode aborts BEFORE Config.loadInstanceState — the full boot log is printed
+# so the first CI run reveals where boot actually got to.
 {
   pkgs,
   self,
-  sandboxedModule,
 }:
 let
   slop = self.lib.slopEnv pkgs;
 
-  # Concrete projectName so the launchers bake their paths (no placeholder/sed),
+  # Concrete projectName so the jail bakes its paths (no placeholder/sed),
   # mirroring tests/jail-functional.nix. The config-dir bootstrap this test
   # exercises is identical in zero-touch mode.
-  claudeBins = slop.mkBins { projectName = "boottest"; };
   opencodeBins = slop.mkBins {
     projectName = "boottest";
     agent = slop.profiles.opencode;
   };
-  piBins = slop.mkBins {
-    projectName = "boottest";
-    agent = slop.profiles.pi;
-  };
+
+  # Replicates the minimal slice of the opencode launcher preamble that the jail
+  # forwards (TMPDIR/OPENCODE_EXCHANGE_DIR via try-fwd-env) and binds rw (the
+  # share/state/cache dirs via try-readwrite, which no-op if their host source is
+  # absent — so they must exist). OPENCODE_DISABLE_MODELS_FETCH keeps boot off
+  # the (unreachable) models.dev catalog. Then execs the jailed binary directly.
+  # Baked into a script so the testScript carries no nested quoting.
+  opencodeBoot = pkgs.writeShellScript "boot-opencode" ''
+    export OPENCODE_DISABLE_MODELS_FETCH=1
+    export ANTHROPIC_API_KEY=slop-vm-dummy
+    export TMPDIR="$HOME/.local/state/opencode/projects/boottest/tmp"
+    export OPENCODE_EXCHANGE_DIR="$HOME/.local/state/opencode/projects/boottest/exchange"
+    mkdir -p "$HOME/.local/share/opencode" "$HOME/.local/state/opencode" "$HOME/.cache" \
+      "$TMPDIR" "$OPENCODE_EXCHANGE_DIR"
+    exec ${opencodeBins.jailedAgent}/bin/jailed-opencode run probe
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "slop-agent-boot-functional";
@@ -49,82 +67,41 @@ pkgs.testers.runNixOSTest {
   nodes.agent =
     { ... }:
     {
-      imports = [ sandboxedModule ];
-
-      security.sandboxed = {
-        enable = true;
-        users = [ "agent" ];
-      };
-
       users.users.agent = {
         isNormalUser = true;
       };
 
-      # Booting the agents realises their full closures (bun/node runtimes), so
-      # the guest needs more headroom than the bash-only jail test.
+      # Booting opencode realises its full closure (the bun runtime), so the
+      # guest needs more headroom than the bash-only jail test.
       virtualisation = {
         memorySize = 4096;
-        diskSize = 10240;
+        diskSize = 8192;
       };
 
-      # The three real launchers (bin/{claude,opencode,pi}); `sandboxed` itself
-      # is installed by the module.
-      environment.systemPackages = [
-        claudeBins.agent
-        opencodeBins.agent
-        piBins.agent
-      ];
+      # The boot script pulls jailed-opencode into the closure; install it so
+      # the derivation is realised in the guest.
+      environment.systemPackages = [ opencodeBins.jailedAgent ];
     };
 
   testScript = ''
     import re
 
     agent.wait_for_unit("multi-user.target")
-    agent.wait_for_unit("auditd.service")
 
-    # claude's jail HARD-binds the shared credentials file (a non-optional
-    # rw-bind source — bwrap fails if it is missing), so create it (empty is
-    # fine; we never reach a real login) plus a project cwd for mount-cwd.
-    # opencode and pi create their own state dirs in the launcher preamble.
-    agent.succeed(
-        "su - agent -c 'mkdir -p ~/.local/state/claude/shared ~/project"
-        " && touch ~/.local/state/claude/shared/.credentials.json'",
+    # Run the jailed agent far enough to reach Config bootstrap, where it writes
+    # ~/.config/opencode/.gitignore. `execute` (not succeed) ignores the exit
+    # code — boot is EXPECTED to fail at the model call in the hermetic VM; we
+    # only care that the jail never denied the config-dir write. `timeout`
+    # bounds a hang. The boot logic is baked into ${opencodeBoot}, so this
+    # su -c carries no nested quotes.
+    agent.execute(
+        "su - agent -c 'timeout 120 ${opencodeBoot} > /tmp/boot-opencode.log 2>&1'"
     )
+    log = agent.succeed("cat /tmp/boot-opencode.log || true")
+    print("---------- opencode boot log ----------\n" + log + "\n---------------------------------------")
 
-    def boot_check(name, cmd, denial):
-        # Run the launcher far enough to reach config bootstrap, capture all
-        # output, and FAIL only on a filesystem write-denial. ANTHROPIC_API_KEY
-        # is a dummy so the agent doesn't stall on interactive auth; `timeout`
-        # bounds a hang; `; true` keeps su's exit clean so we always get the log.
-        out = agent.succeed(
-            f"su - agent -c 'cd ~/project && ANTHROPIC_API_KEY=slop-vm-dummy "
-            f"timeout 120 {cmd} > /tmp/boot-{name}.log 2>&1; true'"
-            f" && cat /tmp/boot-{name}.log"
-        )
-        print(f"---------- boot:{name} ----------\n{out}\n--------------------------------")
-        assert not re.search(denial, out), (
-            f"{name} boot hit a filesystem write-denial inside the jail:\n{out}"
-        )
-
-    # opencode: the regressed case. loadInstanceState/PlatformError in the log
-    # would mean the .gitignore write was denied again.
-    boot_check(
-        "opencode",
-        "opencode run 'slop boot probe'",
-        r"EPERM|EACCES|PlatformError|loadInstanceState|err_[0-9a-f]+",
-    )
-    # claude: headless print mode boots config, then fails the model call.
-    boot_check(
-        "claude",
-        "claude -p 'slop boot probe'",
-        r"EPERM|EACCES|operation not permitted|permission denied",
-    )
-    # pi: -p headless mode (validated on the macOS harness). The os-error
-    # variants cover a Rust strerror surface alongside the node/bun errno text.
-    boot_check(
-        "pi",
-        "pi -p 'slop boot probe'",
-        r"EPERM|EACCES|operation not permitted|permission denied|os error 1[^0-9]|os error 13",
-    )
+    assert not re.search(
+        r"EPERM|EACCES|PlatformError|loadInstanceState|err_[0-9a-f]+", log
+    ), f"opencode boot hit a config-dir write-denial inside the jail:\n{log}"
   '';
 }
