@@ -84,8 +84,6 @@ pkgs.testers.runNixOSTest {
     };
 
   testScript = ''
-    import re
-
     agent.wait_for_unit("multi-user.target")
 
     # Run the jailed agent far enough to reach Config bootstrap, where it writes
@@ -100,8 +98,11 @@ pkgs.testers.runNixOSTest {
     log = agent.succeed("cat /tmp/boot-opencode.log || true")
     print("---------- opencode boot log ----------\n" + log + "\n---------------------------------------")
 
-    assert not re.search(
-        r"EPERM|EACCES|PlatformError|loadInstanceState|err_[0-9a-f]+", log
-    ), f"opencode boot hit a config-dir write-denial inside the jail:\n{log}"
+    # Substring match (not re) — the nixosTest driver type-checks the script and
+    # re.search's stub overloads trip it up. "err_" stands in for opencode's
+    # err_<hex> ref; "loadInstanceState" only appears in its boot error stack.
+    denials = ["EPERM", "EACCES", "PlatformError", "loadInstanceState", "err_"]
+    hit = [marker for marker in denials if marker in log]
+    assert not hit, f"opencode boot hit a config-dir write-denial inside the jail {hit}:\n{log}"
   '';
 }
