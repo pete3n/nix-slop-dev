@@ -63,7 +63,9 @@ agent deliberately pass files in either direction — the user dropping inputs
 in for the agent to ingest, the agent leaving outputs (e.g. handoff
 documents) for the user to collect. Persists across agent runs and lives
 outside both the project working tree and the agent's private temp. Scoped
-per Slop Env (per `projectName`), not shared across projects.
+per Slop Env (per `projectName`), not shared across projects. Standardised
+across every Agent Profile, but surfaced to the agent under a profile-specific
+env var: `CLAUDE_EXCHANGE_DIR`, `OPENCODE_EXCHANGE_DIR`, or `PI_EXCHANGE_DIR`.
 _Avoid_: tmp, scratch (that's Scratch), share (collides with the
 shared-credentials concept)
 
@@ -72,6 +74,6 @@ The per-project temp directory a jailed agent writes to by default, made
 host-visible so the user can inspect what the agent produced. Throwaway, not
 a deliberate handoff channel (that's the Exchange). Exists because a Jail's
 own private temp lives in the agent's mount namespace and is unreachable
-from the host.
+from the host. Surfaced to the agent as `$TMPDIR` across every Agent Profile.
 _Avoid_: tmp (unqualified), Exchange (deliberate and persistent — different
 intent)

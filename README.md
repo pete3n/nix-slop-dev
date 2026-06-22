@@ -1,11 +1,9 @@
 # Nix Slop Dev
-
-This Nix flake and flake templates provide a convenient way to create and
-interact with an AI agent's development environment. These agents run in a 
-per-project confined shell. Outbound network traffic is denied by default.
+This repo's Nix flake and flake templates provide a convenient way to create 
+contained development environments for AI agents. These agents run in a 
+per-project confined shell, with outbound network traffic denied by default.
 
 ## Disclaimer
-
 This project makes no security gaurantees. It provides a defence-in-depth layer,
 but limitations and vulnerabilities still remain. Use it as one mitigation among 
 several. You are responsible for the code your agent executes.
@@ -27,7 +25,6 @@ several. You are responsible for the code your agent executes.
     effect on the next launch. Linux updates live transient units.
 
 ## Getting started
-
 Two prerequisites apply on every platform: install Nix, and enable flakes.
 The following are host specific platform setup instructions:
 
@@ -37,7 +34,6 @@ The following are host specific platform setup instructions:
   [docs/non-nixos-linux.md](docs/non-nixos-linux.md)
 
 ### Tested platforms
-
 Status badges reflect the latest `main` functional-CI run.
 
 | OS                 | Version                          | Status |
@@ -48,36 +44,30 @@ Status badges reflect the latest `main` functional-CI run.
 | Debian             | 13                               | [![debian](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/debian.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
 | Fedora             | 44                               | [![fedora](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/fedora.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml) |
 
-
-Template Status:
+Templates status:
 [![templates](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/templates.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
 
 Other systemd-based Linux distributions with cgroup v2 should work —
 `setup-linux` probes for what it needs and reports what is missing.
 Please file an issue if `--check` passes on your distro but the wrapper
-fails at runtime.
-
-See [docs/testing.md](docs/testing.md) for more information on testing.
+fails at runtime. See [docs/testing.md](docs/testing.md) for more information.
 
 Once setup, you can run a jailed agent directly with:
-
 ``` sh
 nix run github:pete3n/nix-slop-dev#claude
 ```
 
 Or clone a development environment [template](#templates) to customize it for your needs:
-
 ``` sh
 nix flake init -t github:pete3n/nix-slop-dev#claude-code-nvim-dev
 nix develop
 ```
 
 ## Usage
-
 The project ships the following tools. A full reference can be found at:
 [docs/usage.md](docs/usage.md).
 
-**Apps** (`nix run github:pete3n/nix-slop-dev#`):
+**Apps** (Can be directly run with: `nix run github:pete3n/nix-slop-dev#`):
 
 - `claude` — launch Claude Code inside a Slop Env, using the current
   directory's basename as project identity and library-bundled defaults
@@ -91,6 +81,17 @@ The project ships the following tools. A full reference can be found at:
     other projects, and everything else in `$HOME` are hidden.
   - To add hosts, use `sandboxed --wl-add <host>` (persistent) — args
     after `--` go to Claude, not the Sandbox.
+- `pi` — same zero-touch entry point for Pi
+  ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
+  Claude Code. Selected via the `pi` Agent Profile; same Sandbox / Jail
+  guarantees, with per-project session, Scratch, and Exchange dirs under
+  `~/.local/state/pi/projects/<basename>`. Network allows are Pi's provider
+  hosts. See [ADR-0009](docs/adr/0009-agent-profile-generalization.md).
+- `opencode` — same zero-touch entry point for opencode
+  ([sst/opencode](https://github.com/sst/opencode)). Selected via the
+  `opencode` Agent Profile; same guarantees, with per-project Scratch and
+  Exchange dirs under `~/.local/state/opencode/projects/<basename>`. See
+  [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md).
 - `jail-shell` — open an interactive shell inside the same Jail without
   starting an agent. Useful for inspecting what the agent will see, or
   running a build manually under the same confinement.
@@ -98,7 +99,7 @@ The project ships the following tools. A full reference can be found at:
     (`sandboxed --wl-add …`) applies.
   - **Filesystem**: identical to `claude` above.
 - `setup-linux` — diagnose and configure host prerequisites
-  (sudoers, auditd, AppArmor on Ubuntu 24.04).
+  (sudoers, auditd, AppArmor, etc.).
 
 Full default-access matrix and how to extend it:
 [docs/usage.md](docs/usage.md).
@@ -119,6 +120,17 @@ Full default-access matrix and how to extend it:
   `buildGoModule`, both pinned by the flake's `nixpkgs` input.
 - `prereq-guidance` (Linux only) — helper that prints distro-aware setup
   advice from a template's `shellHook` when prerequisites are missing.
+- `hunk` — re-export of [modem-dev/hunk](https://github.com/modem-dev/hunk)
+  (the `hunk` diff-review tool), pinned via the flake's `hunk` input so
+  templates and the outer dev-shell consume one version. The package output
+  also carries the `hunk-review` skill, merged into each template's skills
+  bundle at build time. See
+  [ADR-0007](docs/adr/0007-hunk-dual-sided-projectpkg.md).
+- `worktrunk` — re-export of worktrunk (the `wt` git-worktree workflow CLI)
+  from `nixpkgs-unstable`, for a newer release than the pinned 26.05 ships.
+  Mirrors the hunk re-export pattern; unlike hunk its skills are not in the
+  package output, so they are vendored by hand into each template's skills
+  tree. See [ADR-0008](docs/adr/0008-worktrunk-nixpkgs-reexport-vendored-skills.md).
 
 <a id="templates"></a>
 **Templates** (`nix flake init -t github:pete3n/nix-slop-dev#`):
@@ -133,13 +145,21 @@ The template's `flake.nix` declares one
 ```nix
 devShells.${system}.default = slop.mkShell {
   projectName = "my-project";
-  claudeMdFile = ./slop-env/claude-config/CLAUDE.md;
+  agentMdFile = ./slop-env/claude-config/CLAUDE.md;
   rulesDir = ./slop-env/claude-config/rules;
-  skillsDir = ./slop-env/claude-config/skills;
-  # projectPkgs = with pkgs; [ lua-language-server stylua ];
+  skillsDir = skills; # checked-in skills + hunk-review, merged at build time
+  projectPkgs = [ hunk worktrunk ]; # shipped by default; append your own
   # projectEnv = { FOO = "bar"; };
 };
 ```
+
+Every template's `flake.nix` already wires `hunk` and `worktrunk` (the `wt`
+worktree-workflow CLI) into `projectPkgs` and merges hunk's `hunk-review`
+skill into `skillsDir`, so a freshly-initialised template ships with diff
+review and worktree management on both the dev shell and the jailed agent.
+The `agent` and `enableLocalAi` arguments (selecting a non-Claude Agent
+Profile and a local ollama provider) are covered in
+[docs/usage.md](docs/usage.md).
 
 In the example above, `nix develop` enters the shell; the `shellHook` runs 
 prereq checks and puts `claude` / `jail-shell` on PATH wired to the project's
@@ -156,11 +176,14 @@ The template's `slop-env/claude-config/` tree carries:
   [Matt Pocock's skills format](https://github.com/mattpocock/skills/blob/main/README.md):
   each subdirectory is one skill (a `SKILL.md` plus optional helper
   files) the agent can invoke on demand. The default template ships
-  `diagnose`, `grill-with-docs`, `improve-codebase-architecture`,
-  `prototype`, `tdd`, `to-issues`, `to-prd`, `triage`, and `zoom-out`;
-  add, remove, or replace freely. The whole tree is bind-mounted
-  read-only into the Slop Env at
-  `~/.local/state/claude/projects/<projectName>/skills/`.
+  `diagnose`, `grill-with-docs`, `handoff`, `improve-codebase-architecture`,
+  `prototype`, `tdd`, `teach`, `to-issues`, `to-prd`, `triage`, `worktrunk`,
+  `wt-switch-create`, and `zoom-out`. At build time the `hunk-review` skill
+  from the `hunk` package is merged into the same bundle (so it stays
+  version-locked to the installed `hunk`), giving a freshly-initialised
+  template diff-review and worktree-workflow skills out of the box. Add,
+  remove, or replace freely. The whole tree is bind-mounted read-only into
+  the Slop Env at `~/.local/state/claude/projects/<projectName>/skills/`.
 
 Available templates:
 
@@ -202,10 +225,27 @@ forwarding live in [docs/usage.md](docs/usage.md).
   [jail-nix](https://sr.ht/~alexdavid/jail.nix)'s combinator surface so
   templates can write cross-platform combinator code.
 
+### Exchanging files with the agent
+A Jail hides `/tmp` and most of `$HOME`, so a jailed agent cannot drop a
+file where you can see it by default. Every Slop Env — both the zero-touch
+apps and the templates, on Linux and macOS — provisions two host-visible
+per-project directories to bridge that boundary:
+
+- **Scratch** (`$TMPDIR`) — throwaway space for the agent's temporary and
+  intermediate files. Inspect it freely, but treat it as disposable.
+- **Exchange** — the deliberate two-way handoff channel: drop inputs in for
+  the agent to ingest, collect outputs (e.g. handoff documents) it leaves
+  for you. Persists across agent runs. Surfaced to the agent under an
+  Agent-Profile-specific env var: `CLAUDE_EXCHANGE_DIR`,
+  `OPENCODE_EXCHANGE_DIR`, or `PI_EXCHANGE_DIR`.
+
+The shell prints the Exchange path when you enter the Slop Env. Both live
+outside the project working tree and are scoped per `projectName`, not
+shared across projects. See [CONTEXT.md](CONTEXT.md) for the precise
+definitions and [docs/usage.md](docs/usage.md) for the per-agent paths.
+
 ## How it works
-
 ### Concepts
-
 - **Jail** — the filesystem-confinement boundary built per project template
   (e.g. `jailed-claude`). The agent sees a curated view: the project
   directory, a writable config dir, and nothing else. Enforced by
@@ -220,7 +260,6 @@ forwarding live in [docs/usage.md](docs/usage.md).
 Full glossary: [CONTEXT.md](CONTEXT.md).
 
 ### NixOS
-
 The **Sandbox** runs the agent inside a `systemd-run --user --pty`
 transient unit with `IPAddressDeny=any` plus per-invocation
 `IPAddressAllow=` properties for resolved whitelist entries. Enforcement is
@@ -236,7 +275,6 @@ Hardening sits in `nixosModules.sandboxed` — see
 [docs/nixos.md](docs/nixos.md) for the module options.
 
 ### macOS (with nix-darwin)
-
 macOS has no systemd and no bubblewrap, so both boundaries land on
 Seatbelt (`sandbox-exec` profiles). Seatbelt is daemonless and runs as
 the calling user.
@@ -262,7 +300,6 @@ proxy's own log (whitelist misses).
 Module reference: [docs/macos.md](docs/macos.md).
 
 ### Other Linux distributions (Debian, Ubuntu, Fedora)
-
 The enforcement mechanisms are identical to NixOS — same systemd
 `IPAddressDeny`/`Allow`, same bubblewrap Jail, same auditd violation
 recording. What differs is host configuration: outside NixOS there is no
@@ -278,7 +315,6 @@ for why store-pinning everywhere would break on flake update.
 Setup walkthrough: [docs/non-nixos-linux.md](docs/non-nixos-linux.md).
 
 ## Roadmap
-
 The originally-planned multi-agent templates have shipped: `pi-agent`
 ([ADR-0009](docs/adr/0009-agent-profile-generalization.md)) and `opencode`
 ([ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)), both
