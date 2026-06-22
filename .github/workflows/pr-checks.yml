@@ -92,6 +92,6 @@ jobs:
 
       # Builds every derivation under `checks.${system}` for this runner's
       # system and cross-evaluates the others, failing on the first eval or
-      # build regression. Does NOT touch `hydraJobs` (custom output).
+      # build regression. Does NOT touch `functionalTests` (non-standard output).
       - name: nix flake check
         run: nix flake check -L
