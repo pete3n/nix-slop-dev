@@ -579,6 +579,31 @@
                 probeOracle
               ];
             }).jail-shell;
+
+          # Zero-touch opencode launcher (mirrors `nix run .#opencode`), built
+          # so ci/macos-functional.sh can boot the REAL jailed opencode under
+          # Seatbelt and assert it gets through Config bootstrap. Every other
+          # macOS check is static (it greps this launcher / its SBPL, never runs
+          # it) and the byte-equality pin only flips on OUR eval changes — so an
+          # upstream opencode that writes into its config dir at boot (the err_*
+          # EPERM on ~/.config/opencode/.gitignore via Config.loadInstanceState)
+          # sails straight through. This probe is the runtime signal that would
+          # have caught it. ".agent" is bin/opencode.
+          probe-opencode-boot =
+            ((self.lib.slopEnv pkgs).mkBins {
+              agent = (self.lib.slopEnv pkgs).profiles.opencode;
+            }).agent;
+
+          # claude (.agent = bin/claude) and pi (bin/pi) zero-touch launchers,
+          # same purpose. Both profiles already make their config dir writable
+          # (claude's tmpfs/ensure-dir cfgDir; pi's `try-readwrite ~/.pi/agent`),
+          # so these are REGRESSION guards: they pass today and go red if a
+          # future change makes a config dir read-only the way opencode's was.
+          probe-claude-boot = ((self.lib.slopEnv pkgs).mkBins { }).agent;
+          probe-pi-boot =
+            ((self.lib.slopEnv pkgs).mkBins {
+              agent = (self.lib.slopEnv pkgs).profiles.pi;
+            }).agent;
         }
       );
 
