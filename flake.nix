@@ -3,30 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     jail-nix.url = "sourcehut:~alexdavid/jail.nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
-
-    # Second nixpkgs, tracking unstable, used ONLY to source a current
-    # worktrunk (`wt`). worktrunk is in our pinned 26.05 too (0.50.0), but it
-    # moves fast and unstable ships a newer release. Re-exported as
-    # packages.${system}.worktrunk (mirroring the hunk pattern, ADR-0007) so
-    # templates + the outer dev-shell flake consume `wt` through nix-slop-dev
-    # without each carrying an unstable input. The extra nixpkgs lock entry
-    # is the accepted cost of staying current. See ADR-0008 (worktrunk's
-    # skills are vendored by hand — the deliberate divergence from hunk).
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Review-first terminal diff viewer (ADR-0007). Taken once here and
-    # re-exported as packages.${system}.hunk so templates and the outer
-    # dev-shell flake consume it through nix-slop-dev without their own
-    # hunk input. follows nixpkgs per hunk's own README guidance.
     hunk.url = "github:modem-dev/hunk";
     hunk.inputs.nixpkgs.follows = "nixpkgs";
-
-    # flake-utils and gen-luarc are not used by lib or runtime packages.
-    # They satisfy the nvim template's input signature when
-    # tests/template-nvim-dev-drv.nix invokes its outputs function
-    # directly to capture the rendered devShell's drvPath.
     flake-utils.url = "github:numtide/flake-utils";
     gen-luarc.url = "github:mrcjkb/nix-gen-luarc-json";
   };
@@ -57,12 +38,6 @@
       isLinuxSystem = system: builtins.elem system linuxSystems;
     in
     {
-      # callPackage keeps each derivation overridable so the NixOS /
-      # nix-darwin modules can pass a custom stateDir via
-      # package.override { stateDir = "..."; }.
-      # On Darwin the wrapper spawns sandbox-proxy at runtime (ADR-0003);
-      # the proxy is exposed as a separate output for direct invocation
-      # and testing.
       packages = forAllSystems (
         system:
         let
@@ -73,23 +48,12 @@
             sandboxed = pkgs.callPackage ./packages/sandboxed/default.nix { };
             setup-linux = pkgs.callPackage ./packages/setup-linux/default.nix { };
             prereq-guidance = pkgs.callPackage ./packages/prereq-guidance/default.nix { };
-            # The functional oracle as a /nix/store binary. The distro e2e
-            # harness runs it under `sandboxed` (a systemd-run transient unit);
-            # on Fedora SELinux the unit's init_t cannot execve a $HOME script
-            # (user_home_t), only store binaries (bin_t after the --apply
-            # relabel). Running the store-built oracle matches both the product
-            # (agents live in /nix/store) and the NixOS test's writeShellScriptBin.
+
+            # CI test harness script
             slop-oracle = pkgs.writeShellScriptBin "slop-oracle" (
               builtins.readFile ./tests/oracle/slop-oracle.sh
             );
-            # Re-export (ADR-0007): dual-sided review tool consumed via
-            # projectPkgs by the templates + outer dev-shell flake.
             hunk = hunk.packages.${system}.default;
-            # Re-export of unstable's worktrunk (`wt`), consumed via
-            # projectPkgs like hunk. Sourced from nixpkgs-unstable for a
-            # newer release than our 26.05 pin ships. Its skills are not in
-            # the package, so they're vendored into the templates'
-            # claude-config/skills and maintained by hand.
             worktrunk = nixpkgs-unstable.legacyPackages.${system}.worktrunk;
             default = self.packages.${system}.sandboxed;
           }
@@ -100,14 +64,7 @@
           {
             inherit sandbox-proxy;
             sandboxed = pkgs.callPackage ./packages/sandboxed-darwin/default.nix { inherit sandbox-proxy; };
-            # Re-export (ADR-0007): dual-sided review tool consumed via
-            # projectPkgs by the templates + outer dev-shell flake.
             hunk = hunk.packages.${system}.default;
-            # Re-export of unstable's worktrunk (`wt`), consumed via
-            # projectPkgs like hunk. Sourced from nixpkgs-unstable for a
-            # newer release than our 26.05 pin ships. Its skills are not in
-            # the package, so they're vendored into the templates'
-            # claude-config/skills and maintained by hand.
             worktrunk = nixpkgs-unstable.legacyPackages.${system}.worktrunk;
             default = self.packages.${system}.sandboxed;
           }
@@ -148,21 +105,13 @@
           in
           {
             # Darwin checks cover:
-            #   - sandbox-proxy: the proxy's hostname allowlist matcher
-            #     (pure Go).
-            #   - sandbox-profile: the Seatbelt profile generator (pure Nix).
-            #   - jail-lib: the Jail combinator library (pure Nix).
+            #   - sandbox-proxy: custom Go proxy package to workaround Seatbelt limitations
+            #   - sandbox-profile: the Seatbelt profile generator.
+            #   - jail-lib: the Jail combinator library.
             #   - sandboxed-darwin: the per-jail wrapper builder.
             #   - lib-slop-env-{shape,mkBins-shape}: darwin.nix
             #     dispatch matches the Linux contract.
             sandbox-proxy = import ./tests/sandbox-proxy.nix { inherit pkgs; };
-
-            # worktrunk is re-exported (like hunk, ADR-0007) from
-            # nixpkgs-unstable so templates consume `wt` via nix-slop-dev
-            # without their own input. Eval-only structural guard: if the
-            # re-export is dropped, or worktrunk disappears/renames in
-            # unstable, this fails here rather than at template build time.
-            # Touches only meta, so it does not force a worktrunk build.
             worktrunk-reexport =
               let
                 worktrunkPkg = self.packages.${system}.worktrunk;
@@ -189,29 +138,16 @@
               inherit (pkgs) lib;
             };
 
-            # Eval-level only — checks the public options
-            # (`enable`, `package`, `stateDir`) plus the anti-tests pinning
-            # the deliberate absence of the NixOS module's sudoers/auditd machinery.
             darwin-module = import ./tests/darwin-module.nix {
               inherit pkgs;
               inherit (pkgs) lib;
             };
 
-            # Asserts the claude / jail-shell launchers compute PROJECT_NAME and
-            # export NIX_SLOP_DEV_PROJECT_NAME so the per-jail wrapper's
-            # SBPL/preflight sed targets the right cfgDir. Mirrors Linux's
-            # apps-jail-has-placeholder check at the launcher layer.
             slop-env-darwin = import ./tests/slop-env-darwin.nix {
               inherit pkgs self;
               inherit (pkgs) lib;
             };
 
-            # Darwin parallel of Linux's apps-jail-has-placeholder
-            # (flake.nix's Linux branch). The placeholder must survive into
-            # the materialised per-jail wrapper — without it, the sed pattern
-            # has nothing to match and the apps silently break for any
-            # non-template invocation. Greps the SBPL sed pipeline's match pattern
-            # via the rendered sandboxed-jailed-claude wrapper.
             apps-darwin-jail-has-placeholder =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { };
@@ -226,10 +162,6 @@
                 echo "ok" > $out
               '';
 
-            # Darwin parallel for apps.${system}.pi (ADR-0009): the sentinel
-            # must survive into the per-jail sandboxed-jailed-pi wrapper so the
-            # placeholder launcher's NIX_SLOP_DEV_PROJECT_NAME substitution has
-            # a target.
             apps-pi-darwin-jail-has-placeholder =
               let
                 slop = self.lib.slopEnv pkgs;
@@ -245,20 +177,6 @@
                 echo "ok" > $out
               '';
 
-            # Darwin parallel for apps.${system}.opencode (ADR-0010). opencode
-            # has NO placeholder: the parent ~/.local/state/opencode rw bind +
-            # the launcher's runtime mkdir replace the per-project sed. So this
-            # asserts, on the Darwin opencode LAUNCHER, both the Scratch/Exchange
-            # forward and the ABSENCE of the sentinel.
-            #
-            # NB: grep the launcher, NOT the per-jail sandboxed-jailed-opencode
-            # WRAPPER. The sandboxed-darwin sed pipeline
-            # (packages/sandboxed-darwin/render.nix mkProfileSedPipeline) bakes
-            # the `s|/projects/__SLOP_ENV_PROJECT_NAME__|…|` rewrite into EVERY
-            # jail wrapper unconditionally — a no-op for opencode (which has no
-            # such bind), but the literal string is still present. The ADR-0010
-            # guarantee is about the launcher the user runs, not that shared
-            # wrapper machinery.
             apps-opencode-darwin-scratch-exchange =
               let
                 slop = self.lib.slopEnv pkgs;
@@ -293,33 +211,15 @@
               else
                 throw "lib.slopEnv mkBins shape regressed on Darwin. expected: ${builtins.concatStringsSep " " binsExpected} actual: ${builtins.concatStringsSep " " binsActual}";
 
-            # Regression (HITL 2026-06-19): the jailed-claude OAuth token
-            # must persist in the per-project cfgDir, not via a shared-file
-            # symlink. claude writes .credentials.json atomically (write
-            # .tmp + rename), which (a) detaches a single-file symlink so
-            # the token lands as a regular file in cfgDir and the shared
-            # target never fills, and (b) is then deleted by the next
-            # launch's `ln -sfn -f` preflight — so login was neither
-            # detected (banner checked the empty shared file) nor preserved
-            # (relaunch clobbered the real token). Two invariants lock it:
-            #   1. the emitted shellHook detects login via the per-project
-            #      $CLAUDE_CONFIG_DIR/.credentials.json, not a shared sidecar;
-            #   2. the rendered jail preflight contains no .credentials.json
-            #      symlink to clobber.
             darwin-creds-persist-in-cfgdir =
               let
-                # Uses lib defaults (lib/slop-env/defaults/*) for
-                # claudeMd/rules — in-repo, so no template path needed; this
-                # check only inspects the shellHook + jail preflight, which
-                # don't depend on the bundled config contents.
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
-                checksConfigDir =
-                  pkgs.lib.hasInfix ''[ ! -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]'' bins.shellHook;
-                noSharedCredCheck =
-                  !(pkgs.lib.hasInfix "CLAUDE_SHARED_DIR/.credentials.json" bins.shellHook);
+                checksConfigDir = pkgs.lib.hasInfix ''[ ! -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]'' bins.shellHook;
+                noSharedCredCheck = !(pkgs.lib.hasInfix "CLAUDE_SHARED_DIR/.credentials.json" bins.shellHook);
                 noCredSymlink =
-                  !(builtins.any (line: pkgs.lib.hasInfix ".credentials.json" line)
-                    bins.jailedAgent.jailData.preflight);
+                  !(builtins.any (
+                    line: pkgs.lib.hasInfix ".credentials.json" line
+                  ) bins.jailedAgent.jailData.preflight);
               in
               if checksConfigDir && noSharedCredCheck && noCredSymlink then
                 pkgs.runCommand "darwin-creds-persist-in-cfgdir" { } ''
@@ -328,12 +228,6 @@
               else
                 throw "darwin creds regression: checksConfigDir=${pkgs.lib.boolToString checksConfigDir} noSharedCredCheck=${pkgs.lib.boolToString noSharedCredCheck} noCredSymlink=${pkgs.lib.boolToString noCredSymlink}";
 
-            # Regression (HITL 2026-06-19): the jail launches via
-            # `/usr/bin/env -i` (drops TMPDIR) and `(deny default)` blocks
-            # /tmp, so without redirection the agent's Node tooling EPERMs
-            # creating its temp dir under os.tmpdir()=/tmp. The launchers
-            # point TMPDIR into the writable cfgDir and the jail forwards it
-            # in. Pin both halves: the launcher redirect and the forward.
             darwin-tmpdir-redirected =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
@@ -352,15 +246,10 @@
               else
                 throw "darwin TMPDIR regression: jail does not forward TMPDIR into the sandbox (env -i would drop it)";
 
-            # Exchange parity (CONTEXT.md): CLAUDE_EXCHANGE_DIR is the
-            # deliberate user<->agent handoff channel. Like TMPDIR it is
-            # exported by the launcher into the persistent cfgDir and
-            # forwarded into the jail (now via the shared combinator list).
             darwin-exchange-forwarded =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
-                forwardsExchange =
-                  builtins.elem "CLAUDE_EXCHANGE_DIR" bins.jailedAgent.jailData.envForward;
+                forwardsExchange = builtins.elem "CLAUDE_EXCHANGE_DIR" bins.jailedAgent.jailData.envForward;
               in
               if forwardsExchange then
                 pkgs.runCommand "darwin-exchange-forwarded" { } ''
@@ -378,9 +267,6 @@
         else
           let
             slop = self.lib.slopEnv pkgs;
-            # lib re-exposes the initialised jail-nix object so
-            # templates can build extraCombinators without importing jail-nix
-            # themselves (the nvim template's nvim-dev paths use this).
             expected = [
               "defaults"
               "jail"
@@ -399,12 +285,6 @@
               else
                 throw "lib.slopEnv shape regressed. expected: ${builtins.concatStringsSep " " expected} actual: ${builtins.concatStringsSep " " actual}";
 
-            # worktrunk is re-exported (like hunk, ADR-0007) from
-            # nixpkgs-unstable so templates consume `wt` via nix-slop-dev
-            # without their own input. Eval-only structural guard: if the
-            # re-export is dropped, or worktrunk disappears/renames in
-            # unstable, this fails here rather than at template build time.
-            # Touches only meta, so it does not force a worktrunk build.
             worktrunk-reexport =
               let
                 worktrunkPkg = self.packages.${system}.worktrunk;
@@ -418,9 +298,6 @@
               else
                 throw "worktrunk re-export regressed: isDrv=${pkgs.lib.boolToString isDrv} mainProgram=${toString mainProgram}";
 
-            # Defaults are populated from shared.nix
-            # The list must include coreutils.
-            # Detects accidental wipes of the default list.
             lib-slop-env-defaults =
               let
                 basePkgs = slop.defaults.basePkgs;
@@ -433,9 +310,6 @@
               else
                 throw "lib.slopEnv defaults.basePkgs missing coreutils (count=${toString (builtins.length basePkgs)})";
 
-            # mkBins assembles the per-OS bins from the template's
-            # checked-in claude-config. Asserts the public API shape: keys
-            # match the spec and each value is a derivation / string 
             lib-slop-env-mkBins-shape =
               let
                 bins = slop.mkBins {
@@ -476,14 +350,6 @@
               else
                 throw "apps.${system}.{claude,jail-shell,pi,opencode} missing or wrong shape";
 
-            # Slice 18.2: zero-touch apps build the jail with a
-            # __SLOP_ENV_PROJECT_NAME__ sentinel in cfgDir paths. The
-            # wrapper sed-substitutes basename "$PWD" at invocation. This
-            # check verifies the sentinel is actually present in the
-            # rendered jail launch script when mkBins is called with no
-            # args (apps path). The template calls mkBins with a concrete
-            # projectName, so its launch script must NOT contain the
-            # sentinel (covered by byte-equality in slice 17's check).
             apps-jail-has-placeholder =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { };
@@ -496,10 +362,6 @@
                 echo "ok" > $out
               '';
 
-            # Same zero-touch placeholder guarantee for apps.${system}.pi
-            # (ADR-0009): the pi profile bakes the sentinel into its per-project
-            # session/scratch/exchange bind paths and the pi wrapper
-            # sed-substitutes it at invocation.
             apps-pi-jail-has-placeholder =
               let
                 slop = self.lib.slopEnv pkgs;
@@ -513,9 +375,6 @@
                 echo "ok" > $out
               '';
 
-            # Scratch + Exchange parity for the pi launchers: TMPDIR + the pi
-            # exchange dir must be exported and forwarded through the sandboxed
-            # wrapper so the jail re-applies them after `env -i`.
             apps-pi-scratch-exchange =
               let
                 slop = self.lib.slopEnv pkgs;
@@ -529,13 +388,6 @@
                 echo "pi Scratch + Exchange forwarded on the pi launcher" > $out
               '';
 
-            # Zero-touch opencode (ADR-0010): Scratch (TMPDIR) + Exchange
-            # (OPENCODE_EXCHANGE_DIR) must be exported and forwarded through the
-            # sandboxed wrapper so the jail re-applies them after `env -i`. The
-            # inverse of apps-pi-jail-has-placeholder: opencode binds the parent
-            # ~/.local/state/opencode rw and resolves the per-project subdir in
-            # the launcher, so the launch script must carry NO
-            # __SLOP_ENV_PROJECT_NAME__ sentinel — that is the ADR-0010 guarantee.
             apps-opencode-scratch-exchange =
               let
                 slop = self.lib.slopEnv pkgs;
@@ -552,28 +404,12 @@
                 fi
                 echo "opencode Scratch + Exchange forwarded; no placeholder in launcher (ADR-0010)" > $out
               '';
-            # Slice 18.6: lib/slop-env/defaults/ and the template's
-            # claude-config/ are intentionally duplicated (one is library-
-            # lifecycle, one is project-lifecycle). This check fails when
-            # they drift accidentally; a `.diverged` sentinel in the
-            # template opts out deliberately.
+
             template-default-config-matches-lib = import ./tests/template-default-config-matches-lib.nix {
               inherit pkgs;
             };
 
-            # ADR-0006 consequence: roadmap skeletons stay UN-EXPORTED (absent
-            # from the flake `templates` output) and STILL PARSE until promoted
-            # to a real template. A cheap eval guard so a skeleton can neither
-            # rot into a parse error unnoticed nor be shipped before it is ready.
-            # `import` parses the whole file and returns its builder function;
-            # forcing to a lambda (isFunction) proves it parses without
-            # evaluating the heavy body.
-            #
-            # Both planned skeletons have now graduated to real templates:
-            # pi-agent (ADR-0009) and opencode (ADR-0010) — see the `templates`
-            # output and tests/template-{pi-agent,opencode}-drv. The set is empty
-            # for now; the guard stays so a future skeleton is covered the moment
-            # it is added here.
+            # Allow for incomplete project templates without throwing CI errors
             roadmap-skeletons-guarded =
               let
                 skeletons = { };
@@ -591,11 +427,6 @@
                   echo "roadmap skeletons un-exported and still parse: ${builtins.concatStringsSep " " names}" > $out
                 '';
 
-            # Slice 19.2: mkBins/mkShell accept extraShellHook (string) that
-            # the lib appends to its emitted shellHook. The nvim template
-            # uses this for .luarc.json symlinking, swap-dir reset, and the
-            # nvim-dev config symlink — bits that today live in an inline
-            # template shellHook the refactor needs to dissolve.
             lib-slop-env-extra-shell-hook =
               let
                 marker = "SLOP_HOOK_MARKER_FROM_TEST";
@@ -610,12 +441,6 @@
               else
                 throw "extraShellHook arg did not flow into the emitted shellHook";
 
-            # Slice 19.3: mkBins/mkShell accept extraSandboxedEnvForwards
-            # (list of env var names) appended as -e flags to the claude()
-            # function's sandboxed invocation inside the emitted shellHook.
-            # The nvim template needs this because LUA_PATH is
-            # $PWD-dependent and the jail-side try-fwd-env combinator only
-            # takes effect once the sandbox lets the var through.
             lib-slop-env-extra-sandboxed-env =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins {
@@ -629,19 +454,12 @@
               else
                 throw "extraSandboxedEnvForwards arg did not add an -e flag to the claude() sandboxed call";
 
-            # Scratch + Exchange parity (CONTEXT.md): the Linux launchers and
-            # shellHook must export TMPDIR (Scratch) and CLAUDE_EXCHANGE_DIR
-            # (Exchange) into the per-project cfgDir and forward both through
-            # the sandboxed wrapper (`-e`), so the jail re-applies them after
-            # `env -i`. Without the forward the agent's temp and the handoff
-            # channel fall back to the jail-private /tmp the user can't reach.
             lib-slop-env-scratch-exchange =
               let
                 bins = (self.lib.slopEnv pkgs).mkBins { projectName = "byteq-test"; };
                 hook = bins.shellHook;
                 exportsTmpdir = pkgs.lib.hasInfix ''export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"'' hook;
-                exportsExchange =
-                  pkgs.lib.hasInfix ''export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"'' hook;
+                exportsExchange = pkgs.lib.hasInfix ''export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"'' hook;
                 forwardsBoth = pkgs.lib.hasInfix "-e TMPDIR -e CLAUDE_EXCHANGE_DIR" hook;
               in
               if exportsTmpdir && exportsExchange && forwardsBoth then
@@ -657,26 +475,16 @@
               else
                 throw "linux scratch/exchange regression: exportsTmpdir=${pkgs.lib.boolToString exportsTmpdir} exportsExchange=${pkgs.lib.boolToString exportsExchange} forwardsBoth=${pkgs.lib.boolToString forwardsBoth}";
 
-            # Slice 20 (#01): NixOS module evaluation — asserts user@
-            # sessions carry no cgroup Delegate after the dead BPF
-            # delegation was removed from modules/sandboxed/default.nix.
             nixos-module = import ./tests/nixos-module.nix {
               inherit nixpkgs pkgs system;
               sandboxedModule = self.nixosModules.sandboxed;
             };
 
-            # Slice 20 (#02): sandboxed wrapper --print-tools exercises the
-            # runtime NixOS detection (store paths vs bare names) without a
-            # real NixOS host.
             wrapper-tool-resolution = import ./tests/wrapper-tool-resolution.nix {
               inherit pkgs;
               sandboxed = self.packages.${system}.sandboxed;
             };
 
-            # Slice 20 (#03): setup-linux check-only mode uses a pure
-            # check-lib.sh evaluator driven by fixtures, so we cover every
-            # prerequisite branch without a real Ubuntu/Fedora host. The
-            # -app companion smoke-tests the wired-up nix run entry point.
             setup-linux-checks = import ./tests/setup-linux-checks.nix {
               inherit pkgs;
             };
@@ -686,19 +494,10 @@
               setupLinux = self.packages.${system}.setup-linux;
             };
 
-            # Slice 20 (#04): --apply mode's pure planning + sudoers /
-            # tool-path / auditd-install logic is fixture-driven via
-            # apply-lib.sh, so we cover every distro branch without
-            # mutating any host.
             setup-linux-apply = import ./tests/setup-linux-apply.nix {
               inherit pkgs;
             };
 
-            # Slice 20 (#06 lib-layer rewrite): slop-prereq-guidance picks
-            # distro-aware advice (NixOS module options vs setup-linux) at
-            # runtime via the /etc/NIXOS marker. The marker path is
-            # overridable by argument so both branches are exercised in
-            # the build sandbox; the live auditd/sudo probes are HITL.
             template-prereq-guidance = import ./tests/template-prereq-guidance.nix {
               inherit pkgs;
               prereqGuidance = self.packages.${system}.prereq-guidance;
@@ -716,9 +515,6 @@
                     ;
                 };
 
-                # Slice 19.4: byte-equality baseline for the nvim template.
-                # Captured pre-refactor so slice 19.5's template flip can
-                # prove it preserves the rendered devShell derivation.
                 template-nvim-dev-drv = import ./tests/template-nvim-dev-drv.nix {
                   inherit
                     self
@@ -730,16 +526,10 @@
                     ;
                 };
 
-                # Byte-equality baseline for the pi-agent template (ADR-0009).
-                # Injects `self` so the template builds against local lib
-                # changes (its own nix-slop-dev input is the published flake).
                 template-pi-agent-drv = import ./tests/template-pi-agent-drv.nix {
                   inherit self pkgs;
                 };
 
-                # Byte-equality baseline for the opencode template (ADR-0010).
-                # Same pattern as pi-agent. Regenerate the .expected hash on the
-                # first green build (see the test's header comment).
                 template-opencode-drv = import ./tests/template-opencode-drv.nix {
                   inherit self pkgs;
                 };
@@ -749,58 +539,29 @@
           )
       );
 
-      # Functional test layer (ADR-0006). Kept OUT of `checks` so that a
-      # bare `nix flake check` on a PR runner stays eval-only and fast — these
-      # boot a KVM guest and exercise real enforcement. The merge/nightly
-      # workflow builds them explicitly:
-      #   nix build .#functionalTests.x86_64-linux.sandbox
-      # x86_64-linux only: the enforcement primitives (systemd IPAddressDeny,
-      # bubblewrap, auditd) are arch-independent, so aarch64 stays eval-level.
       functionalTests = {
         x86_64-linux = {
-          # Sandbox (network) boundary: deny-closed, allow-connects,
-          # violation-recorded, plus whitelist persistence. First member of
-          # the layer; the Jail-boundary nixosTest is the planned second.
           sandbox = import ./tests/sandbox-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             sandboxedModule = self.nixosModules.sandboxed;
           };
 
-          # The `--wl-add` LIVE-UPDATE half (ADR-0006 slice 4.1): a host denied
-          # at launch becomes reachable from inside the SAME still-running
-          # sandbox unit after `sandboxed --wl-add` set-property's it — the
-          # runtime counterpart to sandbox-functional.nix's persistence half.
           wl-live-update = import ./tests/sandbox-wl-live-update.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             sandboxedModule = self.nixosModules.sandboxed;
           };
 
-          # Jail (filesystem) boundary: path-hidden, project-rw,
-          # host-binary-absent. Drives the raw bubblewrap launcher via
-          # `jailed-shell -c` with the oracle on the jail PATH.
           jail = import ./tests/jail-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
           };
 
-          # Exported templates compose an enforcing jail carrying their
-          # configured tooling. Reconstructs each template's jail from its real
-          # config via the lib (faithful per the byte-eq checks), then runs the
-          # oracle inside it. The nvim arm also asserts its lua tooling /
-          # headless plumbing is on the jail PATH.
           template = import ./tests/template-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
           };
         };
       }
-      # Darwin: no VM-test framework, so the macOS functional harness
-      # (ci/macos-functional.sh) runs on a real mac. It needs the shared
-      # oracle to run INSIDE the real Seatbelt jail, so we expose the default
-      # `jail-shell` rebuilt with curl + the oracle added to projectPkgs
-      # (curl is not in defaultBasePkgs). The harness builds this and drives
-      # it as `jail-shell [-a host] -- -c '<oracle ...>'`. Mirrors the oracle
-      # injection in tests/jail-functional.nix.
       // nixpkgs.lib.genAttrs darwinSystems (
         system:
         let
@@ -811,39 +572,23 @@
         in
         {
           probe-jail-shell =
-            (
-              (self.lib.slopEnv pkgs).mkBins {
-                projectName = "macos-functional";
-                projectPkgs = [
-                  pkgs.curl
-                  probeOracle
-                ];
-              }
-            ).jail-shell;
+            ((self.lib.slopEnv pkgs).mkBins {
+              projectName = "macos-functional";
+              projectPkgs = [
+                pkgs.curl
+                probeOracle
+              ];
+            }).jail-shell;
         }
       );
 
-      # Slice 18: zero-touch entry points for existing-Nix-flake users.
-      # `nix run github:pete3n/nix-slop-dev#claude` works from any project
-      # root without touching the project's flake.nix. The lib-bundled
-      # defaults (lib/slop-env/defaults/) feed mkBins's CLAUDE.md / rules
-      # when no caller-supplied paths are given.
-      #
-      # Slice 20 (#03) adds setup-linux for non-NixOS hosts (diagnoses
-      # Sandbox/Jail prerequisites; #04 adds --apply mode behind the same
-      # entry point).
       apps = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           slop = self.lib.slopEnv pkgs;
           bins = slop.mkBins { };
-          # Zero-touch pi entry: placeholder projectName resolved at invocation
-          # (ADR-0009 + the pi profile's placeholder path).
           piBins = slop.mkBins { agent = slop.profiles.pi; };
-          # Zero-touch opencode entry: per-project Scratch/Exchange resolved at
-          # invocation WITHOUT the placeholder/sed (ADR-0010 — the opencode
-          # profile's launcher just mkdirs + exports).
           ocBins = slop.mkBins { agent = slop.profiles.opencode; };
         in
         {
@@ -869,9 +614,6 @@
           };
         }
         // (
-          # setup-linux is the non-NixOS prereq probe + apply tool;
-          # Darwin's Seatbelt is daemonless so the app has no Darwin
-          # equivalent.
           if isLinuxSystem system then
             {
               setup-linux = {
@@ -885,10 +627,6 @@
         )
       );
 
-      # Slop Env construction lib. Templates and apps call lib.slopEnv pkgs
-      # to obtain { mkShell; mkBins; defaults; } — see ADR-0005.
-      # jail-nix + llm-agents + our own sandboxed package are injected here
-      # so callers don't need to wire those inputs themselves.
       lib = {
         slopEnv =
           pkgs:
@@ -908,12 +646,6 @@
             jail = if isDarwin then self.lib.jail pkgs else jail-nix.lib.init pkgs;
           };
 
-        # Seatbelt combinator library for the Darwin Jail (issue 10).
-        # Shape mirrors upstream jail-nix's `jail-nix.lib.init pkgs`:
-        # consumers call `lib.jail pkgs` to instantiate the library
-        # against a concrete pkgs set, then use the returned
-        # `combinators` and `jail` constructor to build a per-binary
-        # SBPL profile + bind/forward slice (see ADR-0004).
         jail =
           pkgs:
           import ./lib/jail {
@@ -927,10 +659,6 @@
         default = self.nixosModules.sandboxed;
       };
 
-      # Issue 13: parallel of nixosModules for nix-darwin hosts.
-      # Thin by design — installs the sandboxed-darwin package with the
-      # configured stateDir. Seatbelt needs no root, so the NixOS
-      # module's sudoers/auditd surface has no counterpart here.
       darwinModules = {
         sandboxed = import ./modules/sandboxed-darwin/default.nix self;
         default = self.darwinModules.sandboxed;
