@@ -12,3 +12,7 @@ short element names (`e`), and sort/comparator parameters (`a`, `b`).
 "If I really wanted brevity, I'd write assembly." Use descriptive names: `edit`
 not `e`, `child` not `c`, `char` not `c`, `edit_a`/`edit_b` (or `lhs`/`rhs`) not
 `a`/`b`, a meaningful index/element name not `i`.
+
+## Comments
+Comments should explain why code is being written, especially if it is not obvious.
+Comments should use simple langauge; ELI5, don't just re-write code in English.
