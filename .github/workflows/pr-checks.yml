@@ -85,9 +85,16 @@ jobs:
       # as a warm base on a rotated key, so only the delta rebuilds — never a
       # cold 15m. (packages/** and tests/** use `**`, not `*.nix`, to catch the
       # .go/.sh build inputs under them.)
+      # The `v2` epoch is a manual cache-flush knob. GitHub cache keys are
+      # immutable, so when the SAVE strategy changes (not the inputs) the old
+      # cache under an unchanged key would be restored and re-saved forever.
+      # Bump this token to force a one-time miss + fresh save. v2 flushes the
+      # pre-GC-root caches (saved by the blind size-cap GC, truncated and
+      # missing the runtime outputs) so the first run re-saves a complete,
+      # GC-rooted runtime closure (see the "Pin check closures" step below).
       - uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.system }}-${{ hashFiles('flake.lock', 'flake.nix', 'lib/**', 'packages/**', 'modules/**', 'tests/**', 'templates/**/flake.nix') }}
+          primary-key: nix-${{ matrix.system }}-v2-${{ hashFiles('flake.lock', 'flake.nix', 'lib/**', 'packages/**', 'modules/**', 'tests/**', 'templates/**/flake.nix') }}
           restore-prefixes-first-match: nix-${{ matrix.system }}-
           # GitHub gives 10 GB/repo and evicts LRU; bound what we save and
           # sweep stale caches so we don't thrash that budget.
@@ -103,3 +110,28 @@ jobs:
       # build regression. Does NOT touch `functionalTests` (non-standard output).
       - name: nix flake check
         run: nix flake check -L
+
+      # Pin the check closures as GC roots before the post-run cache save.
+      #
+      # After `nix flake check` the store is dominated by build-time-only deps:
+      # opencode's + hunk's bun2nix node_modules (one path per npm package,
+      # incl. cross-platform bun-pkg-* / core-darwin-x64), our per-check jail
+      # derivations, and source tarballs. On x86_64 that's ~57 GB, versus a
+      # ~3-5 GB *runtime* closure (aarch64, which restores a complete cache and
+      # rebuilds only ~28 derivations, proves the runtime closure is small).
+      # cache-nix-action's gc-max-store-size GC trims by LRU, not reachability,
+      # so it evicted the runtime outputs and x86_64 cold-rebuilt ~986
+      # derivations every run.
+      #
+      # `nix build --out-link` registers an indirect GC root, and the action's
+      # GC never deletes live paths — so rooting every check's output closure
+      # leaves the GC able to trim only the unrooted build-time deps, producing
+      # a small, COMPLETE runtime-closure cache. The realize is instant (the
+      # paths were just built by flake check). attrNames does not force the
+      # check values, so the eval is cheap.
+      - name: Pin check closures as GC roots (keep runtime paths, drop build deps)
+        run: |
+          mkdir -p .gcroots
+          nix build -L --keep-going --out-link .gcroots/check \
+            $(nix eval --raw ".#checks.${{ matrix.system }}" --apply \
+              'cs: builtins.concatStringsSep " " (map (name: ".#checks.${{ matrix.system }}." + name) (builtins.attrNames cs))')
