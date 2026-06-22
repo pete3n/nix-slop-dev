@@ -37,10 +37,11 @@ A per-project AI-agent harness composed of a Sandbox and a Jail. The unit a
 user "enters" when they run their agent (e.g. `claude`, `pi`) or
 `jail-shell`. Produced by
 `nix-slop-dev.lib.${system}.mkSlopEnvBins { ... }` and consumed by the
-`claude-code` / `claude-code-nvim-dev` / `pi-agent` templates (for greenfield
-projects) and the `apps.${system}.{claude,jail-shell}` zero-touch entry points
-(for existing-flake projects). Which agent it confines is set by an Agent
-Profile — Claude Code by default; Pi via the `pi-agent` template. Combines
+`claude-code` / `claude-code-nvim-dev` / `pi-agent` / `opencode` templates (for
+greenfield projects) and the `apps.${system}.{claude,jail-shell,pi,opencode}`
+zero-touch entry points (for existing-flake projects). Which agent it confines
+is set by an Agent Profile — Claude Code by default; Pi via the `pi-agent`
+template; opencode via the `opencode` template. Combines
 both confinement boundaries into one artifact; an agent run outside a Slop Env
 has neither.
 _Avoid_: agent shell (overloaded — used generically for any AI session),

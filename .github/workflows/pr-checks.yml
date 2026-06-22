@@ -6,10 +6,15 @@
 # runs natively per system so every platform's checks are actually realised,
 # not just cross-evaluated.
 #
-# The functional layer is deliberately a SEPARATE flake output
-# (`functionalTests`, not `checks`), so `nix flake check` here never boots a
-# VM — that keeps the PR gate fast. The heavy functional matrix lives in
-# functional.yml and runs on merge/nightly instead.
+# The functional layer is deliberately a SEPARATE, NON-STANDARD flake output
+# (`functionalTests`, not `checks` and not `hydraJobs`), so `nix flake check`
+# skips it entirely — it neither evaluates nor builds those leaves, so the PR
+# gate never boots a VM and stays fast. (`hydraJobs` was tried and rejected:
+# flake check's Hydra-jobset handling deep-evaluates each leaf, and the
+# nixosTest machinery's closure-info derivation trips the disabled
+# allow-import-from-derivation. The cosmetic "unknown flake output" warning is
+# the accepted cost of keeping the functional matrix out of flake check.) The
+# heavy functional matrix lives in functional.yml and runs on merge/nightly.
 name: pr-checks
 
 on:
@@ -87,6 +92,6 @@ jobs:
 
       # Builds every derivation under `checks.${system}` for this runner's
       # system and cross-evaluates the others, failing on the first eval or
-      # build regression. Does NOT touch `functionalTests` (custom output).
+      # build regression. Does NOT touch `hydraJobs` (custom output).
       - name: nix flake check
         run: nix flake check -L
