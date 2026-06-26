@@ -34,7 +34,18 @@ let
       extraCombinators ? [ ],
       extraShellHook ? "",
       extraSandboxedEnvForwards ? [ ],
+      # ADR-0014 per-Account credential isolation is Linux-only in this pass
+      # (macOS OAuth is keychain-single-slot — see the ADR's platform
+      # asymmetry). These args are accepted so a cross-platform template still
+      # evaluates here, but a non-empty `accounts` is refused below rather than
+      # silently giving macOS broken isolation.
+      accounts ? { },
+      defaultAccount ? null,
     }:
+    # Deny-by-default: refuse Accounts on Darwin this pass instead of ignoring
+    # them. Empty `accounts` is the no-Account path and stays byte-identical.
+    assert lib.assertMsg (accounts == { })
+      "slopEnv (darwin): per-Account credential isolation (ADR-0014) is not implemented on macOS in this pass; declare `accounts` only on Linux (e.g. gate on pkgs.stdenv.isLinux for a cross-platform config).";
     # Profiles that supply their own Darwin builder take it; Claude is the
     # built-in default path below (ADR-0009). Profiles without a Darwin builder
     # (e.g. pi) are rejected with a clear message rather than misbuilt.

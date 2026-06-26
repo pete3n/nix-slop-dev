@@ -533,6 +533,35 @@
                 template-opencode-drv = import ./tests/template-opencode-drv.nix {
                   inherit self pkgs;
                 };
+
+                # ADR-0014 per-Account credential isolation: launcher-level
+                # behaviour (Account resolution + deny-by-default validation)
+                # that is observable without bwrap/namespaces. The full
+                # simultaneous-two-Account filesystem behaviour lives in the
+                # nixosTest functional suite (functionalTests below).
+                account-launcher = import ./tests/account-launcher.nix {
+                  inherit self pkgs;
+                };
+
+                account-isolation = import ./tests/account-isolation.nix {
+                  inherit self pkgs;
+                };
+
+                account-apikey = import ./tests/account-apikey.nix {
+                  inherit self pkgs;
+                };
+
+                account-name-validation = import ./tests/account-name-validation.nix {
+                  inherit self pkgs;
+                };
+
+                account-zerotouch-refused = import ./tests/account-zerotouch-refused.nix {
+                  inherit self pkgs;
+                };
+
+                account-apikey-unreadable = import ./tests/account-apikey-unreadable.nix {
+                  inherit self pkgs;
+                };
               }
             else
               { }
@@ -557,6 +586,11 @@
           };
 
           template = import ./tests/template-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+
+          account = import ./tests/account-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
           };
