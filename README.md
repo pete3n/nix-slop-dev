@@ -57,7 +57,12 @@ Once setup, you can run a jailed agent directly with:
 nix run github:pete3n/nix-slop-dev#claude
 ```
 
-Or clone a development environment [template](#templates) to customize it for your needs:
+NOTE: Running the application directly from the repo limits features and project
+customization options. It is intended for a quick emphemeral session with an agent
+in a jailed environment.
+
+To get the full benefit from nix-slop-dev, clone a development environment 
+[template](#templates) and customize it for your needs:
 ``` sh
 nix flake init -t github:pete3n/nix-slop-dev#claude-code-nvim-dev
 nix develop
@@ -71,34 +76,33 @@ The project ships the following tools. A full reference can be found at:
 
 - `claude` — launch Claude Code inside a Slop Env, using the current
   directory's basename as project identity and library-bundled defaults
-  for `CLAUDE.md`, rules, and skills. Zero-touch entry point allows:
-  - **Network**: `api.anthropic.com`, `platform.claude.com`, and (Linux
-    only) `2607:6bc0::/32`. Everything else denied.
-  - **Filesystem**: the current working directory (read/write), the
-    per-project state dir under `~/.local/state/claude/projects/<basename>`,
-    the shared `~/.local/state/claude/shared/.credentials.json`, and
-    `~/.cache` / `~/.npm` / `~/.local/share/claude-code`. `$HOME/.ssh`,
-    other projects, and everything else in `$HOME` are hidden.
-  - To add hosts, use `sandboxed --wl-add <host>` (persistent) — args
-    after `--` go to Claude, not the Sandbox.
+  for `CLAUDE.md`, rules, and skills. 
 - `pi` — same zero-touch entry point for Pi
-  ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
-  Claude Code. Selected via the `pi` Agent Profile; same Sandbox / Jail
-  guarantees, with per-project session, Scratch, and Exchange dirs under
-  `~/.local/state/pi/projects/<basename>`. Network allows are Pi's provider
-  hosts. See [ADR-0009](docs/adr/0009-agent-profile-generalization.md).
+  ([earendil-works/pi](https://github.com/earendil-works/pi))
 - `opencode` — same zero-touch entry point for opencode
-  ([sst/opencode](https://github.com/sst/opencode)). Selected via the
-  `opencode` Agent Profile; same guarantees, with per-project Scratch and
-  Exchange dirs under `~/.local/state/opencode/projects/<basename>`. See
-  [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md).
-- `jail-shell` — open an interactive shell inside the same Jail without
+  ([sst/opencode](https://github.com/sst/opencode))
+
+Zero-touch entry point allows:
+  - **Network** allows:
+    - `api.anthropic.com`
+    - `platform.claude.com`
+    - `2607:6bc0::/32` (Linux only)
+    - Everything else denied.
+  - **Filesystem** allows: 
+    - current working directory (read/write)
+    - `~/.local/state/claude/projects/<projectname>`
+    - `~/.local/state/claude/shared/.credentials.json`
+    - `~/.cache` `~/.npm` `~/.local/share/claude-code`
+    - everything else in `$HOME` is hidden.
+
+- `jail-shell` — open an interactive bash shell inside the same jail without
   starting an agent. Useful for inspecting what the agent will see, or
   running a build manually under the same confinement.
   - **Network**: no per-invocation allows. Only the persistent whitelist
     (`sandboxed --wl-add …`) applies.
-  - **Filesystem**: identical to `claude` above.
-- `setup-linux` — diagnose and configure host prerequisites
+  - **Filesystem**: identical to the Apps above.
+
+- `setup-linux` — diagnose and configure host prerequisites for Linux distros
   (sudoers, auditd, AppArmor, etc.).
 
 Full default-access matrix and how to extend it:
@@ -106,9 +110,8 @@ Full default-access matrix and how to extend it:
 
 **Packages** (`nix build github:pete3n/nix-slop-dev#`):
 
-- `sandboxed` — the wrapper that creates the Sandbox (and on macOS the
-  Jail via Seatbelt). The modules install it onto PATH; see
-  [docs/usage.md](docs/usage.md) for its flag reference.
+- `sandboxed` — the wrapper that creates the Sandbox (and on macOS also the
+  Jail via Seatbelt). See [docs/usage.md](docs/usage.md) for its flag reference.
 - `sandbox-proxy` (macOS only) — the userspace HTTP `CONNECT` / SOCKS5
   proxy that enforces the Host Whitelist on macOS. It is created automatically
   by `sandboxed`, and is compiled from the Go source under `packages/sandbox-proxy/` 
@@ -124,13 +127,9 @@ Full default-access matrix and how to extend it:
   (the `hunk` diff-review tool), pinned via the flake's `hunk` input so
   templates and the outer dev-shell consume one version. The package output
   also carries the `hunk-review` skill, merged into each template's skills
-  bundle at build time. See
-  [ADR-0007](docs/adr/0007-hunk-dual-sided-projectpkg.md).
+  bundle at build time.
 - `worktrunk` — re-export of worktrunk (the `wt` git-worktree workflow CLI)
-  from `nixpkgs-unstable`, for a newer release than the pinned 26.05 ships.
-  Mirrors the hunk re-export pattern; unlike hunk its skills are not in the
-  package output, so they are vendored by hand into each template's skills
-  tree. See [ADR-0008](docs/adr/0008-worktrunk-nixpkgs-reexport-vendored-skills.md).
+  from `nixpkgs-unstable`
 
 <a id="templates"></a>
 **Templates** (`nix flake init -t github:pete3n/nix-slop-dev#`):
@@ -148,8 +147,8 @@ devShells.${system}.default = slop.mkShell {
   agentMdFile = ./slop-env/claude-config/CLAUDE.md;
   rulesDir = ./slop-env/claude-config/rules;
   skillsDir = skills; # checked-in skills + hunk-review, merged at build time
-  projectPkgs = [ hunk worktrunk ]; # shipped by default; append your own
-  # projectEnv = { FOO = "bar"; };
+  projectPkgs = [ hunk worktrunk ]; # shipped by default; append your own from pkgs
+  projectEnv = { FOO = "bar"; }; # Set env vars to pass.
 };
 ```
 
@@ -218,8 +217,7 @@ forwarding live in [docs/usage.md](docs/usage.md).
 
 - `lib.slopEnv pkgs` — returns `{ defaults; jail; mkBins; mkShell; }`.
   Called by every template and by the zero-touch apps to compose a Slop
-  Env. Public stability surface — see
-  [ADR-0005](docs/adr/0005-slop-env-lib-extraction.md).
+  Env. 
 - `lib.jail pkgs` (macOS) — Seatbelt combinator library used to build
   the macOS Jail. Mirrors upstream
   [jail-nix](https://sr.ht/~alexdavid/jail.nix)'s combinator surface so
@@ -244,6 +242,67 @@ outside the project working tree and are scoped per `projectName`, not
 shared across projects. See [CONTEXT.md](CONTEXT.md) for the precise
 definitions and [docs/usage.md](docs/usage.md) for the per-agent paths.
 
+### Multiple accounts
+
+A single Slop Env can declare several authentication identities — **Accounts** — and run agents under different ones simultaneously without their credentials or sessions clobbering each other (see [ADR-0014](docs/adr/0014-per-account-credential-isolation.md), and [CONTEXT.md](CONTEXT.md) for the term). An *Account* is one authentication identity: either an OAuth subscription login or an API key. It is orthogonal to the **Agent Profile** (which agent — Claude, Pi, opencode) and to `projectName` (which project). This pass covers the Claude Agent Profile on **Linux only**.
+
+The contract is two `slop.mkShell` arguments (the same arguments `mkBins` accepts):
+
+- **`accounts`** — a closed registry of Accounts. Shape:
+  `accounts = { <name> = { type = "oauth" | "apikey"; keyFile = "<runtime path>"; }; }`.
+  `keyFile` is only for `type = "apikey"`, where it is **required** (a runtime path such as `/run/agenix/<secret>` — the path, never the secret, is baked; omitting it on an `apikey` Account is an eval error, `attribute 'keyFile' missing`); `oauth` Accounts have no `keyFile`. Account names are constrained to `[A-Za-z0-9._-]+` and validated at eval/build time (so a name can never smuggle shell metacharacters, the sed delimiter, or a path separator — an unsafe name fails *evaluation*, not launch; pinned by [tests/account-name-validation.nix](tests/account-name-validation.nix)).
+- **`defaultAccount`** — optional string; the project default Account. Defaults to `null`.
+
+Both default to the no-Account path (`accounts = {}`, `defaultAccount = null`), which reproduces today's single shared-credential behaviour byte-for-byte (credentials at `~/.local/state/claude/shared/.credentials.json`). Nothing changes for existing users who do not declare `accounts`.
+
+**Selection precedence** (per run): `NIX_SLOP_DEV_ACCOUNT` override → else `defaultAccount` → else (registry non-empty, neither set) refuse with `error: no Account selected. Set NIX_SLOP_DEV_ACCOUNT or a defaultAccount (known Accounts: …).`
+
+**Deny-by-default** — declaring a non-empty `accounts` opts the Slop Env into an account-*required* regime, mirroring the Jail/Sandbox posture:
+
+- An override naming an Account not in the registry **refuses to launch** before the Jail starts, non-zero, with `error: Account <name> is not declared in this Slop Env (known Accounts: …). Refusing to launch.` (pinned by [tests/account-launcher.nix](tests/account-launcher.nix)).
+- Declaring `accounts` **without** a concrete `projectName` (the zero-touch/apps path) is **refused at eval time** — that launcher resolves only the `projectName` placeholder and would otherwise emit a broken, unsubstituted launcher; Accounts require a template/`mkShell`/`mkBins` `projectName` (pinned by [tests/account-zerotouch-refused.nix](tests/account-zerotouch-refused.nix)).
+- For an `apikey` Account, the launcher reads the `keyFile` at invocation and exports `ANTHROPIC_API_KEY` scoped to the single jailed exec only (forwarded via the Sandbox's `-e ANTHROPIC_API_KEY`) — never a global/parent-shell export, and the key never enters the `/nix/store`. An unreadable `keyFile` fails closed before exec with `error: Account <name> keyFile <path> is not readable.` (pinned by [tests/account-apikey.nix](tests/account-apikey.nix) and [tests/account-apikey-unreadable.nix](tests/account-apikey-unreadable.nix)).
+
+**Storage layout** (Linux): credentials are stored per-Account and reused across projects, while session/config state is keyed per Account-*and*-project (so two Accounts on one project never clobber each other's `.claude.json` or sessions):
+
+```sh
+~/.local/state/claude/accounts/<acct>/.credentials.json   # per-Account, reused across projects
+~/.local/state/claude/projects/<proj>/<acct>/             # per Account-and-project: sessions, config,
+                                                          #   plus the per-Account Scratch (tmp) and Exchange dirs
+```
+
+A worked example, mirroring the system-keyed `devShells.default` nesting shown under [Templates](#templates):
+
+```nix
+devShells.${system}.default = slop.mkShell {
+  projectName = "my-project"; # Accounts require a concrete projectName
+  agentMdFile = ./slop-env/claude-config/CLAUDE.md;
+  rulesDir = ./slop-env/claude-config/rules;
+  skillsDir = skills;
+  projectPkgs = [ hunk worktrunk ];
+
+  # ADR-0014 per-Account credential isolation (Linux only this pass).
+  accounts = {
+    acme = { type = "oauth"; };                                  # subscription login
+    globex = { type = "oauth"; };                                # a second login
+    ci = { type = "apikey"; keyFile = "/run/agenix/<secret>"; }; # key, path only
+  };
+  defaultAccount = "acme"; # optional; the per-run override wins over it
+};
+```
+
+**Platform asymmetry** — Claude on Linux gets full OAuth + API-key multi-Account this pass. On **macOS**, declaring a non-empty `accounts` is **refused at eval** with `slopEnv (darwin): per-Account credential isolation (ADR-0014) is not implemented on macOS in this pass; declare accounts only on Linux …` (the keychain has a single slot for Claude OAuth, so file-based per-Account OAuth does not apply). For a cross-platform config, gate the argument on `pkgs.stdenv.isLinux`. On Linux, Accounts are honoured only by the **Claude** Agent Profile this pass: declaring `accounts` with the Pi or opencode profile is currently **silently ignored** — the registry is dropped, with no isolation and no error (a known gap until those profiles implement the same contract, unlike macOS, which refuses outright). Zero-touch apps keep single-credential behaviour.
+
+#### Verify it works
+
+A human walkthrough that doubles as the feature's acceptance test. Most scenarios map to a committed test that pins the expected result (cited inline); scenario 5 (the macOS refusal) is enforced at eval with no dedicated test. Never print real tokens — use placeholders (`sk-ant-…`, `/run/agenix/<secret>`) only.
+
+1. **Two OAuth Accounts at once** (the headline). With the example above, open two terminals and `nix develop` in each, then run `NIX_SLOP_DEV_ACCOUNT=acme claude` in one and `NIX_SLOP_DEV_ACCOUNT=globex claude` in the other. Expect distinct `accounts/{acme,globex}/.credentials.json` and distinct `projects/my-project/{acme,globex}/` session dirs; a `/login` in one Account must not touch the other. (Pinned by [tests/account-isolation.nix](tests/account-isolation.nix) and [tests/account-functional.nix](tests/account-functional.nix).)
+2. **API-key Account.** Declare `ci = { type = "apikey"; keyFile = "/run/agenix/<secret>"; }`, then `NIX_SLOP_DEV_ACCOUNT=ci claude`. Confirm the jailed agent sees `ANTHROPIC_API_KEY` sourced from the file, that it is **absent** from the parent shell env, and that the key never appears in any `/nix/store` path. (Pinned by [tests/account-apikey.nix](tests/account-apikey.nix); the unreadable-`keyFile` fail-closed path by [tests/account-apikey-unreadable.nix](tests/account-apikey-unreadable.nix).)
+3. **Fail-closed on a typo.** `NIX_SLOP_DEV_ACCOUNT=typo claude` refuses with the `is not declared in this Slop Env … Refusing to launch.` error, non-zero, before the Jail starts. (Pinned by [tests/account-launcher.nix](tests/account-launcher.nix).)
+4. **Backward compatibility.** Remove `accounts`/`defaultAccount` (or leave them at their defaults) and `claude` runs exactly as before, against `~/.local/state/claude/shared/.credentials.json` — byte-for-byte unchanged. (Pinned by the byte-equality baseline [tests/template-claude-code-drv.nix](tests/template-claude-code-drv.nix) against `tests/template-claude-code-drv.expected`.)
+5. **macOS.** On a Darwin system, declaring a non-empty `accounts` fails evaluation with the `slopEnv (darwin): … not implemented on macOS …` message — Linux-only this pass.
+
 ## How it works
 ### Concepts
 - **Jail** — the filesystem-confinement boundary built per project template
@@ -256,6 +315,13 @@ definitions and [docs/usage.md](docs/usage.md) for the per-agent paths.
   pinned to loopback by Seatbelt on macOS.
 - **Slop Env** — the dev environment a user enters when running an agent or
 `jail-shell`: one Slop Env = one Jail + one Sandbox.
+- **Account** — one authentication identity an agent runs under (an OAuth
+  subscription login or an API key), selected per run. Orthogonal to the Agent
+  Profile (which agent) and `projectName` (which project): the same agent can
+  run under different Accounts, and one Account is reused across projects.
+  Declared in a closed Nix registry; see
+  [Multiple accounts](#multiple-accounts) and
+  [ADR-0014](docs/adr/0014-per-account-credential-isolation.md).
 
 Full glossary: [CONTEXT.md](CONTEXT.md).
 
@@ -319,4 +385,13 @@ The originally-planned multi-agent templates have shipped: `pi-agent`
 ([ADR-0009](docs/adr/0009-agent-profile-generalization.md)) and `opencode`
 ([ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)), both
 delivering the same Sandbox / Jail guarantees as the default Claude Code
-template. Track further work via repo issues; contributions welcome.
+template.
+
+[Per-Account credential isolation](#multiple-accounts) has also shipped for
+Claude Code on Linux
+([ADR-0014](docs/adr/0014-per-account-credential-isolation.md)) — declare
+multiple Accounts and run agents under a different Account each at the same
+time.
+Still deferred: the same per-Account contract for the Pi and opencode profiles,
+and OAuth multi-Account on macOS (blocked on the system keychain's single
+credential slot). Track further work via repo issues; contributions welcome.
