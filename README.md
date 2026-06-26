@@ -47,14 +47,6 @@ Status badges reflect the latest `main` functional-CI run.
 Templates status:
 [![templates](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pete3n/nix-slop-dev/badges/templates.json)](https://github.com/pete3n/nix-slop-dev/actions/workflows/functional.yml)
 
-> **Platform asymmetry — per-Account credential isolation is Linux-only this
-> pass.** Declaring multiple [Accounts](#multiple-accounts) (the `accounts`
-> registry) is implemented for Claude Code on Linux. On macOS a non-empty
-> `accounts` is refused at evaluation: Claude's OAuth token lives in the system
-> keychain, which has a single slot, so file-based per-Account OAuth does not
-> apply there ([ADR-0014](docs/adr/0014-per-account-credential-isolation.md)).
-> Gate `accounts` on `pkgs.stdenv.isLinux` in a cross-platform config.
-
 Other systemd-based Linux distributions with cgroup v2 should work —
 `setup-linux` probes for what it needs and reports what is missing.
 Please file an issue if `--check` passes on your distro but the wrapper
@@ -65,7 +57,12 @@ Once setup, you can run a jailed agent directly with:
 nix run github:pete3n/nix-slop-dev#claude
 ```
 
-Or clone a development environment [template](#templates) to customize it for your needs:
+NOTE: Running the application directly from the repo limits features and project
+customization options. It is intended for a quick emphemeral session with an agent
+in a jailed environment.
+
+To get the full benefit from nix-slop-dev, clone a development environment 
+[template](#templates) and customize it for your needs:
 ``` sh
 nix flake init -t github:pete3n/nix-slop-dev#claude-code-nvim-dev
 nix develop
@@ -79,34 +76,33 @@ The project ships the following tools. A full reference can be found at:
 
 - `claude` — launch Claude Code inside a Slop Env, using the current
   directory's basename as project identity and library-bundled defaults
-  for `CLAUDE.md`, rules, and skills. Zero-touch entry point allows:
-  - **Network**: `api.anthropic.com`, `platform.claude.com`, and (Linux
-    only) `2607:6bc0::/32`. Everything else denied.
-  - **Filesystem**: the current working directory (read/write), the
-    per-project state dir under `~/.local/state/claude/projects/<basename>`,
-    the shared `~/.local/state/claude/shared/.credentials.json`, and
-    `~/.cache` / `~/.npm` / `~/.local/share/claude-code`. `$HOME/.ssh`,
-    other projects, and everything else in `$HOME` are hidden.
-  - To add hosts, use `sandboxed --wl-add <host>` (persistent) — args
-    after `--` go to Claude, not the Sandbox.
+  for `CLAUDE.md`, rules, and skills. 
 - `pi` — same zero-touch entry point for Pi
-  ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
-  Claude Code. Selected via the `pi` Agent Profile; same Sandbox / Jail
-  guarantees, with per-project session, Scratch, and Exchange dirs under
-  `~/.local/state/pi/projects/<basename>`. Network allows are Pi's provider
-  hosts. See [ADR-0009](docs/adr/0009-agent-profile-generalization.md).
+  ([earendil-works/pi](https://github.com/earendil-works/pi))
 - `opencode` — same zero-touch entry point for opencode
-  ([sst/opencode](https://github.com/sst/opencode)). Selected via the
-  `opencode` Agent Profile; same guarantees, with per-project Scratch and
-  Exchange dirs under `~/.local/state/opencode/projects/<basename>`. See
-  [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md).
-- `jail-shell` — open an interactive shell inside the same Jail without
+  ([sst/opencode](https://github.com/sst/opencode))
+
+Zero-touch entry point allows:
+  - **Network** allows:
+    - `api.anthropic.com`
+    - `platform.claude.com`
+    - `2607:6bc0::/32` (Linux only)
+    - Everything else denied.
+  - **Filesystem** allows: 
+    - current working directory (read/write)
+    - `~/.local/state/claude/projects/<projectname>`
+    - `~/.local/state/claude/shared/.credentials.json`
+    - `~/.cache` `~/.npm` `~/.local/share/claude-code`
+    - everything else in `$HOME` is hidden.
+
+- `jail-shell` — open an interactive bash shell inside the same jail without
   starting an agent. Useful for inspecting what the agent will see, or
   running a build manually under the same confinement.
   - **Network**: no per-invocation allows. Only the persistent whitelist
     (`sandboxed --wl-add …`) applies.
-  - **Filesystem**: identical to `claude` above.
-- `setup-linux` — diagnose and configure host prerequisites
+  - **Filesystem**: identical to the Apps above.
+
+- `setup-linux` — diagnose and configure host prerequisites for Linux distros
   (sudoers, auditd, AppArmor, etc.).
 
 Full default-access matrix and how to extend it:
@@ -114,9 +110,8 @@ Full default-access matrix and how to extend it:
 
 **Packages** (`nix build github:pete3n/nix-slop-dev#`):
 
-- `sandboxed` — the wrapper that creates the Sandbox (and on macOS the
-  Jail via Seatbelt). The modules install it onto PATH; see
-  [docs/usage.md](docs/usage.md) for its flag reference.
+- `sandboxed` — the wrapper that creates the Sandbox (and on macOS also the
+  Jail via Seatbelt). See [docs/usage.md](docs/usage.md) for its flag reference.
 - `sandbox-proxy` (macOS only) — the userspace HTTP `CONNECT` / SOCKS5
   proxy that enforces the Host Whitelist on macOS. It is created automatically
   by `sandboxed`, and is compiled from the Go source under `packages/sandbox-proxy/` 
@@ -132,13 +127,9 @@ Full default-access matrix and how to extend it:
   (the `hunk` diff-review tool), pinned via the flake's `hunk` input so
   templates and the outer dev-shell consume one version. The package output
   also carries the `hunk-review` skill, merged into each template's skills
-  bundle at build time. See
-  [ADR-0007](docs/adr/0007-hunk-dual-sided-projectpkg.md).
+  bundle at build time.
 - `worktrunk` — re-export of worktrunk (the `wt` git-worktree workflow CLI)
-  from `nixpkgs-unstable`, for a newer release than the pinned 26.05 ships.
-  Mirrors the hunk re-export pattern; unlike hunk its skills are not in the
-  package output, so they are vendored by hand into each template's skills
-  tree. See [ADR-0008](docs/adr/0008-worktrunk-nixpkgs-reexport-vendored-skills.md).
+  from `nixpkgs-unstable`
 
 <a id="templates"></a>
 **Templates** (`nix flake init -t github:pete3n/nix-slop-dev#`):
@@ -156,8 +147,8 @@ devShells.${system}.default = slop.mkShell {
   agentMdFile = ./slop-env/claude-config/CLAUDE.md;
   rulesDir = ./slop-env/claude-config/rules;
   skillsDir = skills; # checked-in skills + hunk-review, merged at build time
-  projectPkgs = [ hunk worktrunk ]; # shipped by default; append your own
-  # projectEnv = { FOO = "bar"; };
+  projectPkgs = [ hunk worktrunk ]; # shipped by default; append your own from pkgs
+  projectEnv = { FOO = "bar"; }; # Set env vars to pass.
 };
 ```
 
@@ -226,8 +217,7 @@ forwarding live in [docs/usage.md](docs/usage.md).
 
 - `lib.slopEnv pkgs` — returns `{ defaults; jail; mkBins; mkShell; }`.
   Called by every template and by the zero-touch apps to compose a Slop
-  Env. Public stability surface — see
-  [ADR-0005](docs/adr/0005-slop-env-lib-extraction.md).
+  Env. 
 - `lib.jail pkgs` (macOS) — Seatbelt combinator library used to build
   the macOS Jail. Mirrors upstream
   [jail-nix](https://sr.ht/~alexdavid/jail.nix)'s combinator surface so
