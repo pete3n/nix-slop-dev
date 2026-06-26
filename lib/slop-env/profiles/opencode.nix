@@ -185,6 +185,14 @@ let
       (set-env "SHELL" "${pkgs.bashInteractive}/bin/bash")
       # Distinctive in-jail prompt, matching the other profiles.
       (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
+      # Worktrunk worktrees inside .git/ (see ADR-0015). The jail only binds
+      # the project dir (cwd), so worktrunk's default sibling path would land
+      # outside the jail and the agent couldn't reach it; .git/ is under cwd,
+      # reachable, and git never reports its own contents — so the worktrees
+      # need no .gitignore. Jail-scoped: the user's own `wt` outside the jail
+      # keeps worktrunk's default path. Value is worktrunk template syntax it
+      # expands itself; set-env stores it verbatim.
+      (set-env "WORKTRUNK_WORKTREE_PATH" ".git/slop-worktrees/{{branch|sanitize}}")
       (add-pkg-deps (basePkgs ++ projectPkgs))
     ])
     ++ lib.optional (skillsDir != null) (

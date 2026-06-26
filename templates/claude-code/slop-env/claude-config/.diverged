@@ -1,0 +1,19 @@
+# Intentional divergence from lib/slop-env/defaults/CLAUDE.md (ADR-0015).
+#
+# This template's CLAUDE.md carries a "## Worktrees" section documenting how
+# worktrunk (`wt`) behaves inside the jail: worktrees are placed under
+# .git/slop-worktrees/ (set via WORKTRUNK_WORKTREE_PATH) so they stay reachable
+# in the cwd-only jail and out of `git status`. That guidance belongs here
+# because the claude-code template ships `wt` (projectPkgs) AND the worktrunk /
+# wt-switch-create skills.
+#
+# The lib default is the zero-touch / apps baseline. It ships NEITHER the `wt`
+# binary (worktrunk lives only in template projectPkgs) NOR the skills, so
+# documenting worktrunk there would point the agent at tooling it doesn't have.
+# The WORKTRUNK_WORKTREE_PATH env var the library sets is harmless there —
+# nothing reads it without `wt`.
+#
+# This marker disables the template-default-config-matches-lib drift ratchet for
+# this whole config dir. The ONLY intended divergence is the "## Worktrees"
+# section. Keep everything else in CLAUDE.md — and all of rules/ — in sync with
+# lib/slop-env/defaults/ by hand.

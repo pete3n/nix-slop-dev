@@ -25,3 +25,30 @@ host-visible:
 
 Never write a file you intend to share to `/tmp` — it will be invisible to the
 user. Use `$OPENCODE_EXCHANGE_DIR`.
+
+## Worktrees (`wt` / worktrunk)
+
+`wt` (worktrunk) is available — prefer it. Put any independent line of work in
+its own worktree: parallel tasks, a throwaway experiment, or anything you'd
+otherwise juggle with `git stash`. Each worktree is its own branch and checkout,
+so work doesn't have to be serialized on one branch. The `worktrunk` and
+`wt-switch-create` skills cover the commands.
+
+Worktrees are created inside **`.git/slop-worktrees/<branch>`** — not the sibling
+directory worktrunk uses by default. This is set for you automatically and is
+required: the jail confines you to the project directory, so a sibling worktree
+would be unreachable, and placing them under `.git/` keeps the checkouts out of
+`git status`. Don't override `WORKTRUNK_WORKTREE_PATH`.
+
+Two jail-specific caveats the skills don't account for:
+
+- The worktrunk skill's tmux/Zellij "agent handoff" pattern does **not** apply —
+  there is no terminal multiplexer inside the jail. Its "Parallel sub-Agents"
+  example also shows worktrunk's default *sibling* path (`worktrunk.<branch>`),
+  which doesn't exist here. To parallelize, pre-create each worktree with
+  `wt switch --create <branch> --no-cd --format=json` and point your sub-agents
+  at the `path` it prints — never a hardcoded sibling path.
+- `wt merge`, and any `wt` command that runs project hooks, may need the user to
+  approve those hook commands first. On an approval prompt, stop and ask the user
+  to run `wt config approvals add` — never pass `--yes`. Commits, pushes, and
+  merges stay user-authorized.
