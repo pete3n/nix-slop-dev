@@ -86,7 +86,13 @@ pkgs.testers.runNixOSTest {
         )
 
     # 1 + 2. Write the Account's token + a session marker from INSIDE acme's jail.
-    agent.succeed(run_in("acme", "echo ACME_TOKEN > \\\"$CLAUDE_CONFIG_DIR/.credentials.json\\\" && echo HI > \\\"$CLAUDE_CONFIG_DIR/sessions/marker\\\""))
+    # $CLAUDE_CONFIG_DIR is escaped (\$) so it survives the agent login shell and
+    # is expanded by the JAILED bash, which gets the value via try-fwd-env. An
+    # unescaped $ would expand in the agent shell instead, and because it shares
+    # the simple command with the CLAUDE_CONFIG_DIR= prefix assignment, bash
+    # expands the word using the value from BEFORE the assignment (empty) — the
+    # write then lands at /sessions/marker, which doesn't exist.
+    agent.succeed(run_in("acme", "echo ACME_TOKEN > \\\"\\$CLAUDE_CONFIG_DIR/.credentials.json\\\" && echo HI > \\\"\\$CLAUDE_CONFIG_DIR/sessions/marker\\\""))
 
     # Credential isolation: the token landed in accounts/acme on the host and is
     # absent from accounts/globex (distinct cross-project credential stores).
@@ -101,9 +107,12 @@ pkgs.testers.runNixOSTest {
     # 3. api-key forwarding: ANTHROPIC_API_KEY set at launch must survive the
     # jail's env -i and reach the jailed process (try-fwd-env, added for the
     # per-Account regime). Print it from inside the jail and confirm the value.
+    # $ANTHROPIC_API_KEY is escaped (\$) for the same reason as above: let the
+    # jailed bash expand the try-fwd-env'd value, not the agent shell (where the
+    # prefix-assignment timing would expand it to empty before the var is set).
     out = agent.succeed(
         "su - agent -c 'cd /home/agent/project && CLAUDE_CONFIG_DIR=" + state + "/projects/accttest/acme"
-        " ANTHROPIC_API_KEY=SEKRIT-XYZ /home/agent/j-acme -c \"printf GOTKEY=%s $ANTHROPIC_API_KEY\"'"
+        " ANTHROPIC_API_KEY=SEKRIT-XYZ /home/agent/j-acme -c \"printf GOTKEY=%s \\$ANTHROPIC_API_KEY\"'"
     )
     assert "GOTKEY=SEKRIT-XYZ" in out, f"ANTHROPIC_API_KEY not forwarded into jail: {out!r}"
   '';
