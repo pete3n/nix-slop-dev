@@ -603,6 +603,11 @@
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
           };
+
+          account = import ./tests/account-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
         };
       }
       // nixpkgs.lib.genAttrs darwinSystems (
