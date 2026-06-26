@@ -119,7 +119,8 @@ in
       cfgDir = "~/.local/state/claude/projects/${projectName}${accountSessionSuffix}";
       # Credential graft source: per-Account dir when active, else the shared
       # single-identity file (byte-identical no-Account default).
-      credSourceFile = if accountCredFile != null then accountCredFile else "${sharedDir}/.credentials.json";
+      credSourceFile =
+        if accountCredFile != null then accountCredFile else "${sharedDir}/.credentials.json";
       c = jail.combinators;
       cfgDirInit =
         if cfgDirCombinator != null then

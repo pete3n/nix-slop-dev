@@ -301,7 +301,7 @@ let
               }
               exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
                 -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
-                ${lib.optionalString accountsActive ''$SLOP_API_KEY_FWD ''}${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+                ${lib.optionalString accountsActive "$SLOP_API_KEY_FWD "}${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
                 ${if accountsActive then ''"$SLOP_LAUNCHER"'' else "${jailedClaude}/bin/jailed-claude"} "$@"
             ''
         );
@@ -388,27 +388,29 @@ let
             alias jail-shell="sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- setpriv --ambient-caps=-sys_nice -- jailed-shell"${lib.optionalString accountsActive ''
 
 
-            # ADR-0014: per-Account launchers override the single-credential
-            # ones above when this Slop Env declares Accounts. Each runs in a
-            # subshell so a deny-by-default refusal (or a per-launch Account
-            # override) never leaks env or kills the interactive dev shell. The
-            # jailed launcher is resolved off PATH and Account-rewritten per run.
-            claude() {
-            	(
-            		${accountLaunchPrep ''"$(command -v jailed-claude)"'' "jailed-claude"}sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
-            			-e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
-            			${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}$SLOP_API_KEY_FWD setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
-            	)
-            }
-            # A function shares the jail-shell name with the alias above; the
-            # alias would win at the prompt, so drop it before defining ours.
-            unalias jail-shell 2>/dev/null || true
-            jail-shell() {
-            	(
-            		${accountLaunchPrep ''"$(command -v jailed-shell)"'' "jailed-shell"}sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
-            			setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
-            	)
-            }''}
+              # ADR-0014: per-Account launchers override the single-credential
+              # ones above when this Slop Env declares Accounts. Each runs in a
+              # subshell so a deny-by-default refusal (or a per-launch Account
+              # override) never leaks env or kills the interactive dev shell. The
+              # jailed launcher is resolved off PATH and Account-rewritten per run.
+              claude() {
+              	(
+              		${accountLaunchPrep ''"$(command -v jailed-claude)"'' "jailed-claude"}sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
+              			-e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
+              			${
+                   lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards
+                 }$SLOP_API_KEY_FWD setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+              	)
+              }
+              # A function shares the jail-shell name with the alias above; the
+              # alias would win at the prompt, so drop it before defining ours.
+              unalias jail-shell 2>/dev/null || true
+              jail-shell() {
+              	(
+              		${accountLaunchPrep ''"$(command -v jailed-shell)"'' "jailed-shell"}sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
+              			setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+              	)
+              }''}
           '';
       in
       # Deny-by-default eval-time guards. Both vacuously pass when no Accounts
