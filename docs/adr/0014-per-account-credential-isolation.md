@@ -49,11 +49,19 @@ orthogonal to both Agent Profile and projectName, selected per agent run.
 
 ## Consequences
 
-- **Platform asymmetry (documented, user-facing).** Linux gets full OAuth +
-  API-key multi-Account. macOS gets API-key multi-Account, but OAuth stays
-  single-identity because the keychain has one slot for Claude's service entry.
-  A macOS user's second OAuth team will not "take" — this must be surfaced in
-  the docs so it is not mistaken for a bug.
+- **Platform asymmetry (documented, user-facing).** Per-Account isolation is
+  delivered on **Linux only** this pass — full OAuth + API-key multi-Account.
+  On **macOS the launcher refuses a non-empty `accounts` registry at
+  evaluation** with a clear error, rather than silently giving broken
+  isolation: Claude's macOS OAuth token lives in the system keychain, which has
+  a single slot for its service entry, so a second OAuth Account could never
+  "take". A cross-platform Slop Env must therefore gate `accounts` on
+  `pkgs.stdenv.isLinux`. (An earlier draft of this ADR proposed letting macOS
+  keep API-key multi-Account while OAuth stayed single-identity; the shipped
+  decision is the stricter eval-time refusal above, so the asymmetry is not
+  mistaken for a bug.) Lifting this — file-based per-Account auth on macOS — is
+  deferred; see the rejected "symmetric file-based auth on macOS" option above
+  for why blocking the keychain is fragile.
 - **Scope this pass.** Claude on Linux is implemented and tested first as the
   proving ground; Pi and opencode follow the same profile contract later
   (opencode's cwd-keyed global SQLite db needs a per-Account db — deferred).

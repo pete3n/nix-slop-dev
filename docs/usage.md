@@ -178,6 +178,8 @@ Both `mkBins` and `mkShell` accept the same arguments. The full list:
 | `extraCombinators` | list | `[]` | Additional Jail combinators appended after the lib's defaults. Use for project-specific bind-mounts, host-resolve targets, etc. Last-match-wins: extras can narrow defaults. |
 | `extraShellHook` | string | `""` | Appended to the `shellHook` the lib emits. Used for `mkShell` callers that need extra one-time setup (e.g. the nvim-dev template's `.luarc.json` symlinking). |
 | `extraSandboxedEnvForwards` | list of strings | `[]` | Env-var names added as `-e <var>` flags to the `claude` launcher's `sandboxed` invocation. Pair with a `try-fwd-env` combinator inside the Jail to actually surface the value to the agent. |
+| `accounts` | attrset | `{}` | (Linux / Claude profile only) Closed registry of authentication identities: `{ <name> = { type = "oauth" \| "apikey"; keyFile?; }; }` (`keyFile` is required for `apikey`, absent for `oauth`). A non-empty registry opts into an account-required regime — the active Account is `NIX_SLOP_DEV_ACCOUNT` (launch override) else `defaultAccount`, and an unset or unknown selection refuses to launch. Credentials live per-Account (`~/.local/state/claude/accounts/<acct>/`), session state per Account-and-project (`~/.local/state/claude/projects/<proj>/<acct>/`). Requires a concrete `projectName`; names must match `[A-Za-z0-9._-]+`; refused at eval on macOS. Declaring it with the Pi/opencode profiles on Linux is currently silently ignored (no isolation, no error). Empty (the default) keeps single-credential behaviour byte-for-byte. See [Multiple accounts](../README.md#multiple-accounts) / [ADR-0014](adr/0014-per-account-credential-isolation.md). |
+| `defaultAccount` | string or `null` | `null` | The Account chosen when no `NIX_SLOP_DEV_ACCOUNT` override is set. Optional: with neither a default nor an override, a Slop Env that declares `accounts` refuses to launch until one is selected. |
 | `name` (mkShell only) | string | `"nix-shell"` | The dev-shell's store-path name. Cosmetic. |
 
 Calling `mkShell` with `projectPkgs` does two things: the packages
@@ -307,3 +309,33 @@ extraShellHook = ''
 
 Appended after the lib's prereq checks. Runs once each time the user
 enters `nix develop`.
+
+### Declare multiple Accounts
+
+(Linux / Claude Code only — full guide and verification steps in
+[Multiple accounts](../README.md#multiple-accounts).) Run agents under more
+than one authentication identity, with credentials and sessions isolated
+per Account:
+
+```nix
+devShells.${system}.default = slop.mkShell {
+  projectName = "my-project";
+  # ...other args
+  accounts = {
+    acme   = { type = "oauth"; };
+    globex = { type = "apikey"; keyFile = "/run/agenix/globex-anthropic"; };
+  };
+  defaultAccount = "acme";
+};
+```
+
+Pick the Account per run with `NIX_SLOP_DEV_ACCOUNT` (e.g.
+`NIX_SLOP_DEV_ACCOUNT=globex claude`); it falls back to `defaultAccount`,
+and an unknown name refuses to launch before the Jail starts. For an
+`apikey` Account, `keyFile` is required and is a runtime path (e.g.
+`/run/agenix/<secret>`) read at launch — the key is forwarded only to the
+single jailed exec and never enters the `/nix/store`. On a cross-platform
+flake, gate the registry on `pkgs.stdenv.isLinux`, since macOS refuses a
+non-empty `accounts`; and note that `accounts` is honoured only by the
+Claude profile — declaring it with the Pi/opencode profiles is currently
+silently ignored ([ADR-0014](adr/0014-per-account-credential-isolation.md)).
