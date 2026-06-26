@@ -14,9 +14,19 @@
 # Public API (stable contract):
 #   slop.mkShell { projectName, agent?, rulesDir, skillsDir, agentMdFile,
 #                  enableLocalAi?, basePkgs?, projectPkgs?, projectEnv?,
-#                  extraCombinators? }
+#                  extraCombinators?, accounts?, defaultAccount? }
 #     → pkgs.mkShell ...
 #   slop.mkBins  { same args }
+#
+#   accounts / defaultAccount — ADR-0014 per-Account credential isolation
+#   (Claude/Linux this pass). `accounts` is a closed registry
+#   ({ <name> = { type = "oauth" | "apikey"; keyFile?; }; }); the active Account
+#   is the launch-time NIX_SLOP_DEV_ACCOUNT override else `defaultAccount`, and
+#   an unknown selection is refused. Credentials live per-Account
+#   (~/.local/state/claude/accounts/<acct>/), session state per Account-and-
+#   project (~/.local/state/claude/projects/<proj>/<acct>/). Empty `accounts`
+#   (the default) reproduces today's single shared-credential behaviour
+#   byte-for-byte. macOS refuses a non-empty `accounts` (keychain single-slot).
 #     → { claude; jail-shell; jailedClaude; jailedShell;
 #         sandboxedPackages; shellHook; }
 #   slop.profiles

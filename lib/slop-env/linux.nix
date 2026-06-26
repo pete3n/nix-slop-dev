@@ -37,6 +37,13 @@ let
       extraCombinators ? [ ],
       extraShellHook ? "",
       extraSandboxedEnvForwards ? [ ],
+      # ADR-0014 per-Account credential isolation. `accounts` is the closed,
+      # Nix-declared registry ({ <name> = { type = "oauth"|"apikey"; keyFile?; }; });
+      # `defaultAccount` is the project default selected when no launch-time
+      # NIX_SLOP_DEV_ACCOUNT override is given. Empty `accounts` (the default)
+      # reproduces today's single shared-credential behaviour byte-for-byte.
+      accounts ? { },
+      defaultAccount ? null,
     }:
     # Profiles that supply their own Linux builder (e.g. pi) take it; Claude is
     # the built-in default path below, kept byte-identical (ADR-0009).
@@ -74,18 +81,28 @@ let
         claudeSettings = agent.settings;
 
         jailCombinators =
-          (agent.mkJailCombinators {
-            inherit
-              jail
-              projectName
-              skillsDir
-              claudeMd
-              claudeSettings
-              basePkgs
-              projectPkgs
-              projectEnv
-              ;
-          })
+          (agent.mkJailCombinators (
+            {
+              inherit
+                jail
+                projectName
+                skillsDir
+                claudeMd
+                claudeSettings
+                basePkgs
+                projectPkgs
+                projectEnv
+                ;
+            }
+            # When Accounts are declared, bake the __SLOP_ENV_ACCOUNT__
+            # placeholder into the per-Account session root and credential
+            # source; the launcher sed-substitutes it at invocation. Omitted
+            # entirely with no Accounts, so the combinator list is byte-identical.
+            // lib.optionalAttrs accountsActive {
+              accountSessionSuffix = "/${accountPlaceholder}";
+              accountCredFile = "~/.local/state/claude/accounts/${accountPlaceholder}/.credentials.json";
+            }
+          ))
           ++ extraCombinators;
 
         jailedClaude = jail agent.jailedName agent.package jailCombinators;
@@ -96,6 +113,110 @@ let
         sandboxedPackages = [ sandboxed ];
 
         usesPlaceholder = projectName == projectNamePlaceholder;
+
+        # ADR-0014: Accounts are opt-in. Declaring any Account switches this
+        # Slop Env into the per-Account regime; an empty registry leaves every
+        # emitted string untouched (byte-identical no-Account path).
+        accountsActive = accounts != { };
+        accountNames = builtins.attrNames accounts;
+        # Account names ride unquoted into the registry-membership for-loop, the
+        # apikey case pattern, the sed replacement, and the per-Account paths.
+        # Constrain them to the same safe charset as PROJECT_NAME so a name can
+        # never smuggle shell metacharacters, the sed delimiter, whitespace, or a
+        # path separator — a deny-by-default registry refused at eval, not
+        # misbehaving at launch. Vacuously true for an empty registry, so the
+        # no-Account derivation is unchanged.
+        accountNamesValid = builtins.all (name: builtins.match "[A-Za-z0-9._-]+" name != null) accountNames;
+        # Runtime placeholder for the resolved Account, baked into the jailed
+        # binary's destination paths and sed-substituted by the launcher. The
+        # sed is slash-anchored ("/__SLOP_ENV_ACCOUNT__") so it rewrites the
+        # /projects/<proj>/ and /accounts/ DEST paths but never the dash-form
+        # write-text SOURCE store names — the same anchoring the projectName
+        # placeholder relies on (see placeholderPreamble).
+        accountPlaceholder = "__SLOP_ENV_ACCOUNT__";
+        # defaultAccount may be null (no project default → the launch-time
+        # override is mandatory). Rendered into the launcher as the `:-` fallback.
+        defaultAccountStr = if defaultAccount == null then "" else defaultAccount;
+
+        # Deny-by-default Account resolution + validation, run at the very top
+        # of every in-scope launcher before any state dir is touched or the
+        # jail is exec'd. Resolves NIX_SLOP_DEV_ACCOUNT (else the project
+        # default) and refuses to launch if the result is empty or not in the
+        # baked registry — matching the jail/Sandbox deny-by-default posture.
+        # Empty when no Accounts are declared, so launchers stay byte-identical.
+        accountResolveValidate = lib.optionalString accountsActive ''
+          SLOP_ACCOUNT="''${NIX_SLOP_DEV_ACCOUNT:-${defaultAccountStr}}"
+          if [ -z "$SLOP_ACCOUNT" ]; then
+            printf 'error: no Account selected. Set NIX_SLOP_DEV_ACCOUNT or a defaultAccount (known Accounts: %s).\n' "${lib.concatStringsSep " " accountNames}" >&2
+            exit 1
+          fi
+          _slop_acct_ok=0
+          for _slop_a in ${lib.concatStringsSep " " accountNames}; do
+            if [ "$_slop_a" = "$SLOP_ACCOUNT" ]; then _slop_acct_ok=1; fi
+          done
+          if [ "$_slop_acct_ok" -ne 1 ]; then
+            printf 'error: Account %s is not declared in this Slop Env (known Accounts: %s). Refusing to launch.\n' "$SLOP_ACCOUNT" "${lib.concatStringsSep " " accountNames}" >&2
+            exit 1
+          fi
+        '';
+
+        # Runtime ANTHROPIC_API_KEY resolution for apikey Accounts. The
+        # registry's keyFile PATH is baked (never the secret); the launcher
+        # reads it at invocation, exports the key into the launch subshell only,
+        # and sets SLOP_API_KEY_FWD so the caller adds `-e ANTHROPIC_API_KEY` to
+        # sandboxed. oauth Accounts fall through the default arm (no key). The
+        # key never enters the store and never escapes the launch subshell.
+        apiKeyCase =
+          let
+            apikeyArm =
+              name:
+              let
+                acct = accounts.${name};
+              in
+              lib.optionalString ((acct.type or "oauth") == "apikey") ''
+                ${name})
+                  if [ -r "${acct.keyFile}" ]; then
+                    ANTHROPIC_API_KEY="$(${pkgs.coreutils}/bin/cat "${acct.keyFile}")"
+                    export ANTHROPIC_API_KEY
+                    SLOP_API_KEY_FWD="-e ANTHROPIC_API_KEY"
+                  else
+                    printf 'error: Account %s keyFile %s is not readable.\n' "$SLOP_ACCOUNT" "${acct.keyFile}" >&2
+                    exit 1
+                  fi
+                  ;;
+              '';
+          in
+          ''
+            SLOP_API_KEY_FWD=""
+            case "$SLOP_ACCOUNT" in
+            ${lib.concatStrings (map apikeyArm accountNames)}*) ;;
+            esac
+          '';
+
+        # Per-Account launch preamble (only emitted when Accounts are active).
+        # After resolving + validating the Account, it points the session env
+        # at the per Account-and-project root, ensures the per-Account
+        # credential dir exists (so the graft source is present), and rewrites
+        # the jailed launcher's __SLOP_ENV_ACCOUNT__ placeholder to the resolved
+        # Account — slash-anchored so only DEST paths (/projects/<proj>/<acct>/
+        # and /accounts/<acct>/) are touched, never the dash-form write-text
+        # SOURCE store names. The result is left in "$SLOP_LAUNCHER" for the
+        # caller to exec. `jailedSrc` is a shell expression yielding the source
+        # jailed launcher; `jailedName` names the materialised copy.
+        accountLaunchPrep = jailedSrc: jailedName: ''
+          ${accountResolveValidate}export CLAUDE_CONFIG_DIR="$HOME/.local/state/claude/projects/${projectName}/$SLOP_ACCOUNT"
+          export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+          export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
+          _slop_cred_dir="$HOME/.local/state/claude/accounts/$SLOP_ACCOUNT"
+          mkdir -p "$CLAUDE_CONFIG_DIR" "$_slop_cred_dir" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
+          touch "$_slop_cred_dir/.credentials.json"
+          [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+          SLOP_LAUNCH_DIR=$(${pkgs.coreutils}/bin/mktemp -d -t slop-env.XXXXXX)
+          trap '${pkgs.coreutils}/bin/rm -rf "$SLOP_LAUNCH_DIR"' EXIT
+          SLOP_LAUNCHER="$SLOP_LAUNCH_DIR/${jailedName}"
+          ${pkgs.gnused}/bin/sed 's|/__SLOP_ENV_ACCOUNT__|/'"$SLOP_ACCOUNT"'|g' ${jailedSrc} > "$SLOP_LAUNCHER"
+          ${pkgs.coreutils}/bin/chmod +x "$SLOP_LAUNCHER"
+          ${apiKeyCase}'';
 
         # First-run state dir + credential bootstrap. Idempotent on every
         # invocation. Matches today's shellHook (slice 18.3). `.claude.json`
@@ -172,11 +293,16 @@ let
           else
             ''
               set -euo pipefail
-              ${concretePreamble}
+              ${
+                if accountsActive then
+                  accountLaunchPrep "${jailedClaude}/bin/jailed-claude" "jailed-claude"
+                else
+                  concretePreamble
+              }
               exec ${sandboxed}/bin/sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
                 -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
-                ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
-                ${jailedClaude}/bin/jailed-claude "$@"
+                ${lib.optionalString accountsActive ''$SLOP_API_KEY_FWD ''}${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
+                ${if accountsActive then ''"$SLOP_LAUNCHER"'' else "${jailedClaude}/bin/jailed-claude"} "$@"
             ''
         );
 
@@ -198,11 +324,16 @@ let
           else
             ''
               set -euo pipefail
-              ${concretePreamble}
+              ${
+                if accountsActive then
+                  accountLaunchPrep "${jailedShell}/bin/jailed-shell" "jailed-shell"
+                else
+                  concretePreamble
+              }
               exec ${sandboxed}/bin/sandboxed -q \
                 -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
                 ${pkgs.util-linux}/bin/setpriv --ambient-caps=-sys_nice -- \
-                ${jailedShell}/bin/jailed-shell "$@"
+                ${if accountsActive then ''"$SLOP_LAUNCHER"'' else "${jailedShell}/bin/jailed-shell"} "$@"
             ''
         );
 
@@ -254,9 +385,43 @@ let
                 lib.concatMapStrings (v: "-e ${v} \\\n\t\t") extraSandboxedEnvForwards
               }setpriv --ambient-caps=-sys_nice -- jailed-claude "$@"
             }
-            alias jail-shell="sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- setpriv --ambient-caps=-sys_nice -- jailed-shell"
+            alias jail-shell="sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- setpriv --ambient-caps=-sys_nice -- jailed-shell"${lib.optionalString accountsActive ''
+
+
+            # ADR-0014: per-Account launchers override the single-credential
+            # ones above when this Slop Env declares Accounts. Each runs in a
+            # subshell so a deny-by-default refusal (or a per-launch Account
+            # override) never leaks env or kills the interactive dev shell. The
+            # jailed launcher is resolved off PATH and Account-rewritten per run.
+            claude() {
+            	(
+            		${accountLaunchPrep ''"$(command -v jailed-claude)"'' "jailed-claude"}sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
+            			-e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
+            			${lib.concatMapStrings (v: "-e ${v} ") extraSandboxedEnvForwards}$SLOP_API_KEY_FWD setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+            	)
+            }
+            # A function shares the jail-shell name with the alias above; the
+            # alias would win at the prompt, so drop it before defining ours.
+            unalias jail-shell 2>/dev/null || true
+            jail-shell() {
+            	(
+            		${accountLaunchPrep ''"$(command -v jailed-shell)"'' "jailed-shell"}sandboxed -q -e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR -- \
+            			setpriv --ambient-caps=-sys_nice -- "$SLOP_LAUNCHER" "$@"
+            	)
+            }''}
           '';
       in
+      # Deny-by-default eval-time guards. Both vacuously pass when no Accounts
+      # are declared, so the no-Account derivation is unchanged.
+      # (1) Account names ride into shell/sed/path contexts — constrain charset.
+      assert lib.assertMsg accountNamesValid
+        "slopEnv (linux): Account names must match [A-Za-z0-9._-]+ (got: ${lib.concatStringsSep ", " accountNames}). Other characters can corrupt the launcher's shell/sed/path handling.";
+      # (2) Accounts need a concrete projectName: the zero-touch/apps placeholder
+      # launcher resolves only the projectName placeholder, never the Account one,
+      # so declaring Accounts there would emit an unsubstituted, broken launcher.
+      # ADR-0014 scopes Accounts to the template/mkShell/mkBins(projectName) path.
+      assert lib.assertMsg (!(accountsActive && usesPlaceholder))
+        "slopEnv (linux): Accounts require an explicit projectName. The zero-touch apps path keeps single-credential behavior (ADR-0014) — pass projectName to mkShell/mkBins to use Accounts.";
       {
         # Output keys are agent-neutral (ADR-0009): `agent` is the wrapper bin,
         # `jailedAgent` the jailed agent derivation — the local bindings keep
