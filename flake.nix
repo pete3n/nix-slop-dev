@@ -590,6 +590,15 @@
             inherit self;
           };
 
+          # Boots the real jailed opencode under the bwrap jail and asserts no
+          # config-dir write is denied — the runtime coverage the opencode
+          # .gitignore EPERM slipped through (macOS counterpart, covering all
+          # three agents on Seatbelt, lives in ci/macos-functional.sh).
+          agent-boot = import ./tests/agent-boot-functional.nix {
+            pkgs = nixpkgs.legacyPackages.x86_64-linux;
+            inherit self;
+          };
+
           account = import ./tests/account-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
