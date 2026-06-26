@@ -55,4 +55,8 @@ default profile. `piProfile` is the first second agent, proving the boundary.
   once across projects — the faithful analog of Claude's shared
   `.credentials.json` + per-project sessions, achieved with one env var rather
   than a symlink graft.
+  _Superseded in part by [ADR-0014](0014-per-account-credential-isolation.md):
+  the "auth stays global, log in once" stance no longer holds when an Account
+  is selected — credentials then become per-Account. The no-Account default
+  path remains as described here._
 - A second profile (`opencode`) is now an additive file, not a lib rewrite.

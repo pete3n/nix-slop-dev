@@ -533,6 +533,35 @@
                 template-opencode-drv = import ./tests/template-opencode-drv.nix {
                   inherit self pkgs;
                 };
+
+                # ADR-0014 per-Account credential isolation: launcher-level
+                # behaviour (Account resolution + deny-by-default validation)
+                # that is observable without bwrap/namespaces. The full
+                # simultaneous-two-Account filesystem behaviour lives in the
+                # nixosTest functional suite (functionalTests below).
+                account-launcher = import ./tests/account-launcher.nix {
+                  inherit self pkgs;
+                };
+
+                account-isolation = import ./tests/account-isolation.nix {
+                  inherit self pkgs;
+                };
+
+                account-apikey = import ./tests/account-apikey.nix {
+                  inherit self pkgs;
+                };
+
+                account-name-validation = import ./tests/account-name-validation.nix {
+                  inherit self pkgs;
+                };
+
+                account-zerotouch-refused = import ./tests/account-zerotouch-refused.nix {
+                  inherit self pkgs;
+                };
+
+                account-apikey-unreadable = import ./tests/account-apikey-unreadable.nix {
+                  inherit self pkgs;
+                };
               }
             else
               { }
@@ -561,11 +590,7 @@
             inherit self;
           };
 
-          # Boots the real jailed opencode under the bwrap jail and asserts no
-          # config-dir write is denied — the runtime coverage the opencode
-          # .gitignore EPERM slipped through (macOS counterpart, covering all
-          # three agents on Seatbelt, lives in ci/macos-functional.sh).
-          agent-boot = import ./tests/agent-boot-functional.nix {
+          account = import ./tests/account-functional.nix {
             pkgs = nixpkgs.legacyPackages.x86_64-linux;
             inherit self;
           };

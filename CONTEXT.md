@@ -57,6 +57,17 @@ emit the runnable bins. Claude Code is the default profile.
 _Avoid_: adapter, backend, agent kind, harness (collides with the agent's own
 naming)
 
+**Account**:
+One authentication identity an agent runs under — either an OAuth subscription
+login or an API key — selected per agent run. Orthogonal to both Agent Profile
+(which agent) and projectName (which project): the same agent can run under
+different Accounts, and one Account can be used across projects. Declared in a
+closed, Nix-level registry on the Slop Env; the active one is chosen by a
+project default with a launch-time override, and an unknown selection is
+refused. Credentials are stored per-Account (a login is reused across
+projects); session state is stored per Account-and-project pair.
+_Avoid_: Profile (collides with Agent Profile), identity, team, user, login
+
 **Exchange**:
 The per-project, host-visible directory through which a user and a jailed
 agent deliberately pass files in either direction — the user dropping inputs

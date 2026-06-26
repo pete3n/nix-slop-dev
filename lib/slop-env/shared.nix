@@ -100,10 +100,27 @@ in
       # (true) — its tmpfs cfgDir has no other persistence path.
       # HITL 2026-06-19.
       shareCredentialsFile ? true,
+      # ADR-0014 per-Account profile-contract hooks. `accountSessionSuffix` is
+      # appended to the per-project config dir so an active Account gets its own
+      # session/state root (per Account-and-project); `accountCredFile` is the
+      # credential graft SOURCE (per-Account, cross-project). Both default to
+      # the no-Account values ("" and the shared file), so an Account-free Slop
+      # Env emits a byte-identical combinator list. The OS engine fills these
+      # with the __SLOP_ENV_ACCOUNT__ placeholder when an Account is active and
+      # the launcher sed-substitutes it (slash-anchored) at invocation.
+      accountSessionSuffix ? "",
+      accountCredFile ? null,
     }:
     let
       sharedDir = "~/.local/state/claude/shared";
-      cfgDir = "~/.local/state/claude/projects/${projectName}";
+      # The Account segment rides on cfgDir, so every per-project state path
+      # below (settings, sessions, .credentials.json dest, caches' siblings)
+      # inherits it without further plumbing. Empty suffix => today's path.
+      cfgDir = "~/.local/state/claude/projects/${projectName}${accountSessionSuffix}";
+      # Credential graft source: per-Account dir when active, else the shared
+      # single-identity file (byte-identical no-Account default).
+      credSourceFile =
+        if accountCredFile != null then accountCredFile else "${sharedDir}/.credentials.json";
       c = jail.combinators;
       cfgDirInit =
         if cfgDirCombinator != null then
@@ -144,7 +161,7 @@ in
     # the real token. Darwin sets shareCredentialsFile=false and lets the
     # token live in the persistent cfgDir directly. HITL 2026-06-19.
     ++ lib.optional shareCredentialsFile (
-      rw-bind (noescape "${sharedDir}/.credentials.json") (noescape "${cfgDir}/.credentials.json")
+      rw-bind (noescape credSourceFile) (noescape "${cfgDir}/.credentials.json")
     )
 
     ++ [
@@ -198,5 +215,11 @@ in
       (set-env "PS1" "\\[\\e[1;31m\\](jail)\\[\\e[0m\\] bash-\\v\\$ ")
       (add-pkg-deps (basePkgs ++ projectPkgs))
     ]
+    # ADR-0014: for an active Account (accountCredFile set) forward
+    # ANTHROPIC_API_KEY through the jail's `env -i`, so an apikey Account's
+    # launcher-supplied key reaches the agent. try-fwd-env only forwards when
+    # the var is set, so oauth Accounts (no key) are unaffected. Omitted with
+    # no Account, keeping the no-Account combinator list byte-identical.
+    ++ lib.optional (accountCredFile != null) (c.try-fwd-env "ANTHROPIC_API_KEY")
     ++ lib.mapAttrsToList (key: value: c.set-env key value) projectEnv;
 }

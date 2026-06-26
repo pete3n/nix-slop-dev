@@ -35,5 +35,14 @@
   # Claude's jail combinator builder: cfgDir, config injection, per-project rw
   # state, the shared-credentials graft, caches, and env forwards. The OS arms
   # still supply their own envSrc / cfgDirCombinator / shareCredentialsFile.
+  #
+  # ADR-0014 per-Account contract: this builder also accepts the agent-agnostic
+  # `accountSessionSuffix` (appended to the per-project state root for per
+  # Account-and-project isolation) and `accountCredFile` (the per-Account
+  # credential graft source). Both default to the no-Account values, so an
+  # Account-free Slop Env is byte-identical. Pi/opencode implement the same two
+  # hooks when they gain Account support (their auth files differ); the
+  # launcher-level keyFile/ANTHROPIC_API_KEY plumbing in linux.nix is Claude-
+  # first this pass and generalises to a profile hook as a follow-up.
   mkJailCombinators = shared.mkJailCombinators;
 }
