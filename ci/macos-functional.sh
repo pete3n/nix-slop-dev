@@ -36,6 +36,18 @@
 #      cfgdir guards that wiring. The "no live effect on a RUNNING session"
 #      half of the --wl-add quirk is also deferred (needs a backgrounded
 #      session); we cover the persistence-applies-next-launch half.
+#   5. The agent-boot smoke checks assume each launch reaches the agent's config
+#      bootstrap (opencode: InstanceStore.boot -> Config.loadInstanceState;
+#      claude `-p`; pi `-p`). That runs before any model call, so no key/network
+#      is needed. Each is a NEGATIVE assertion (fails only on a write-denial
+#      signature), so an auth/network error can't false-FAIL — but an invocation
+#      that short-circuits BEFORE config bootstrap would false-PASS. opencode has
+#      a positive cross-check (the ".gitignore present" line). claude `-p` is a
+#      well-known headless mode; pi `-p` is a BEST-EFFORT guess — confirm on the
+#      first green run on a real mac that pi reaches its bootstrap (and swap the
+#      args if pi's non-interactive entrypoint differs). opencode is the only
+#      current bug-fix here; claude and pi are regression guards (their config
+#      dirs are already writable).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,6 +59,14 @@ SYSTEM=$(nix eval --raw --impure --expr 'builtins.currentSystem')
 echo "== building probe jail-shell ($SYSTEM) =="
 nix build ".#functionalTests.${SYSTEM}.probe-jail-shell" -o "$REPO_ROOT/result-macos-probe"
 JS="$REPO_ROOT/result-macos-probe/bin/jail-shell"
+
+echo "== building probe agent launchers ($SYSTEM) =="
+nix build ".#functionalTests.${SYSTEM}.probe-opencode-boot" -o "$REPO_ROOT/result-macos-opencode"
+nix build ".#functionalTests.${SYSTEM}.probe-claude-boot" -o "$REPO_ROOT/result-macos-claude"
+nix build ".#functionalTests.${SYSTEM}.probe-pi-boot" -o "$REPO_ROOT/result-macos-pi"
+OC="$REPO_ROOT/result-macos-opencode/bin/opencode"
+CC="$REPO_ROOT/result-macos-claude/bin/claude"
+PI="$REPO_ROOT/result-macos-pi/bin/pi"
 
 # Host-side oracle, for the UNCONFINED violation-logged check.
 ORACLE_HOST="$REPO_ROOT/tests/oracle/slop-oracle.sh"
@@ -189,6 +209,63 @@ check tmpdir-redirect "$JS" -q -- -c \
 "$JS" --wl-add "$STUB_IP" >/dev/null 2>&1 || true
 check wl-add-persists "$JS" -q -- -c "slop-oracle net-allow '$STUB_URL'"
 "$JS" --wl-del "$STUB_IP" >/dev/null 2>&1 || true
+
+# --- agent boot smoke (the gap that let the opencode .gitignore EPERM ship) ---
+# Launch each REAL jailed agent under Seatbelt far enough to reach its config
+# bootstrap — the point where it writes into its own config dir (opencode's
+# ~/.config/opencode/.gitignore; claude's .claude.json/statsig; pi's
+# trust.json/sessions under ~/.pi/agent). These are the only checks that EXECUTE
+# an agent under the sandbox; everything above runs a jailed bash. Bootstrap
+# happens before any model call, so a dummy key + the host allowlist is enough:
+# the agent boots, hits a 401, and exits. No `timeout(1)` on stock macOS, so back
+# each run with a portable kill-after timer.
+#
+# Negative assertion: FAIL only on a filesystem write-denial signature, so an
+# auth/network error can't false-FAIL. The errno regex (EPERM/EACCES) is the best
+# cross-agent signal; if a benign caught-and-logged EACCES during normal boot
+# turns this red on first run, tighten the per-agent regex against the log tail.
+boot_check() {
+  # boot_check <name> <launcher> <denial-regex> [args...]
+  local name=$1 launcher=$2 sig=$3; shift 3
+  local logf; logf=$(mktemp)
+  printf '\n========== boot:%s ==========\n' "$name"
+  ( cd "$WORK" && ANTHROPIC_API_KEY=slop-ci-dummy "$launcher" "$@" ) >"$logf" 2>&1 &
+  local pid=$!
+  ( sleep 20; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) &
+  local killer=$!
+  wait "$pid" 2>/dev/null || true
+  kill "$killer" 2>/dev/null || true
+  tail -n 25 "$logf"
+  if grep -qiE "$sig" "$logf"; then
+    echo "FAIL boot:$name — sandbox denied a config-dir write during boot"; fail=1
+  else
+    echo "PASS boot:$name — reached config bootstrap with no sandbox-denied write"
+  fi
+  rm -f "$logf"
+}
+
+# opencode: the regressed case. Richest signature (its err_*/PlatformError + the
+# exact denied path) on top of the shared errno core.
+boot_check opencode "$OC" 'PlatformError|EPERM|EACCES|err_[0-9a-f]+|config/opencode/\.gitignore' \
+  run "slop ci boot probe"
+# Positive confirmation opencode actually reached loadInstanceState (guards the
+# false-PASS in risk point 5). Informational — the filename is an internal we
+# don't hard-gate on.
+if [ -f "$HOME/.config/opencode/.gitignore" ]; then
+  echo "  confirmed: opencode reached loadInstanceState (.gitignore written in cfgDir)"
+else
+  echo "  NOTE: ~/.config/opencode/.gitignore not present — confirm 'opencode run' reaches Config bootstrap"
+fi
+
+# claude: headless print mode (-p) boots config + calls the model, then exits.
+boot_check claude "$CC" 'EPERM|EACCES|operation not permitted|permission denied' \
+  -p "slop ci boot probe"
+# pi: -p is a best-effort headless flag — CONFIRM on first green run that pi
+# reaches its config bootstrap (see risk point 5); if pi has a different
+# non-interactive entrypoint, swap the args here. os-error 1/13 cover a Rust
+# strerror surface in addition to the node/bun errno strings.
+boot_check pi "$PI" 'EPERM|EACCES|operation not permitted|permission denied|os error 1[^0-9]|os error 13' \
+  -p "slop ci boot probe"
 
 printf '\n========== RESULT ==========\n'
 if [ "$fail" -eq 0 ]; then

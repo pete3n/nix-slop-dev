@@ -124,9 +124,23 @@ let
       projectPkgs,
       projectEnv,
       extraCombinators,
+      cfgDirCombinator ? null,
     }:
     let
       contextMd = contextOf { inherit agentMdFile rulesDir; };
+
+      # opencode writes instance state into its config dir at boot
+      # (InstanceStore.boot -> Config.loadInstanceState drops a .gitignore),
+      # so ~/.config/opencode must be a writable base. Linux gets jail-nix's
+      # tmpfs (in-namespace ephemeral, so the host config dir is never
+      # exposed); Darwin gets ensure-dir (host-persistent, no cleanup) via the
+      # cfgDirCombinator param. The injected opencode.json/AGENTS.md/skills are
+      # layered read-only on top — opencode only reads those.
+      cfgDirInit =
+        if cfgDirCombinator != null then
+          cfgDirCombinator (jailC.noescape "~/.config/opencode")
+        else
+          jailC.tmpfs (jailC.noescape "~/.config/opencode");
     in
     (with jailC; [
       network
@@ -147,9 +161,12 @@ let
       (try-readwrite (noescape "~/.local/state/opencode"))
       (try-readwrite (noescape "~/.cache"))
 
-      # Config (ro): opencode.json + AGENTS.md injected from the store.
-      # ~/.config/opencode is otherwise read-only — opencode reads it, never
-      # writes there.
+      # Config dir: a writable base (cfgDirInit) so opencode can persist the
+      # instance state it writes at boot (a .gitignore via
+      # Config.loadInstanceState — opencode would otherwise EPERM here). The
+      # store-injected opencode.json + AGENTS.md are layered read-only on top;
+      # opencode reads those, never writes them.
+      cfgDirInit
       (write-text (noescape "~/.config/opencode/opencode.json") (
         builtins.toJSON (settingsFor enableLocalAi)
       ))
@@ -410,6 +427,9 @@ in
         # no bind preflight.
         envSrc = "/usr/bin/env";
         extra = darwinExtras;
+        # Seatbelt can't mount a tmpfs, so the writable config dir must persist
+        # on the host (no rm-rf cleanup) — same rationale as the Claude cfgDir.
+        cfgDirCombinator = jailC.ensure-dir;
       };
 
       jailedOpencode = jail.jail "jailed-opencode" opencode-pkg ocCombinators;
