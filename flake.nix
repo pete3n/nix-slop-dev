@@ -409,6 +409,14 @@
               inherit pkgs;
             };
 
+            # Multi-endpoint Local AI feature (Slices 1-6; ADRs 0011/0012/0013).
+            # Pure-eval: the profile generators turn the localAi option
+            # into provider/worker config, asserted at eval time (throws on
+            # mismatch). System-agnostic, so it lives in the shared block.
+            local-ai-config = import ./tests/local-ai-config.nix {
+              inherit self pkgs;
+            };
+
             # Allow for incomplete project templates without throwing CI errors
             roadmap-skeletons-guarded =
               let

@@ -62,6 +62,55 @@ in
     in
     lib.concatStringsSep "\n\n" ([ (builtins.readFile contextMdFile) ] ++ ruleBodies);
 
+  # Loopback liveness probe for declared Local AI endpoints (Slice 3; ADR-0012).
+  # Emitted into the devShell shellHook — NOT the launchers — so it runs on the
+  # host where the user's SSH tunnels are visible. Each endpoint is probed with
+  # a dependency-free bash /dev/tcp connect under a 1s timeout (store-path
+  # timeout/bash so it never relies on the outer shell's PATH). Warn-only: a
+  # failed probe prints a hint and never blocks shell entry or agent launch.
+  # An empty list yields the empty string, so a config without localAiEndpoints
+  # emits an unchanged shellHook (the byte-equality invariant).
+  localLivenessProbe =
+    localAiEndpoints:
+    let
+      probeOne = endpoint: ''
+        if ${pkgs.coreutils}/bin/timeout 1 ${pkgs.bashInteractive}/bin/bash -c 'exec 3<>/dev/tcp/127.0.0.1/${toString endpoint.port}' 2>/dev/null; then
+          printf '\033[1;32m✓\033[0m local AI endpoint %s reachable on 127.0.0.1:%s\n' '${endpoint.name}' '${toString endpoint.port}'
+          _slop_localai_up=1
+        else
+          printf '\033[1;33m✗\033[0m local AI endpoint %s unreachable on 127.0.0.1:%s (tunnel down?)\n' '${endpoint.name}' '${toString endpoint.port}'
+        fi
+      '';
+    in
+    lib.optionalString (localAiEndpoints != [ ]) ''
+
+      # Local AI endpoint liveness (warn-only; ADR-0012 loopback). No nc/curl
+      # dependency, never blocks shell entry.
+      _slop_localai_up=0
+      ${lib.concatMapStrings probeOne localAiEndpoints}if [ "$_slop_localai_up" -eq 0 ]; then
+        printf '\033[1;33mℹ\033[0m no local AI endpoints reachable — start your SSH tunnel(s).\n'
+      fi'';
+
+  # Validate a localAiEndpoints list, returning it unchanged on success so it
+  # composes inline (`map f (assertEndpoints endpoints)`). Guards two failure
+  # modes the profiles cannot represent sanely: duplicate endpoint names (which
+  # would silently collide into one ollama-<name> provider via listToAttrs), and
+  # an endpoint with no models (the launch/worker model ref ollama-<name>/<id>
+  # would be undefined). Both become eval errors with a clear message. An empty
+  # list is valid (the back-compat no-endpoints path).
+  assertEndpoints =
+    localAiEndpoints:
+    let
+      names = map (endpoint: endpoint.name) localAiEndpoints;
+      modelless = builtins.filter (endpoint: (endpoint.models or [ ]) == [ ]) localAiEndpoints;
+    in
+    if builtins.length (lib.unique names) != builtins.length names then
+      throw "slopEnv: localAi.settings.endpoints has duplicate endpoint name(s); each name must be unique (it becomes the ollama-<name> provider key). Got: ${lib.concatStringsSep ", " names}"
+    else if modelless != [ ] then
+      throw "slopEnv: localAi.settings.endpoints entry '${(builtins.head modelless).name}' declares no models; each endpoint needs at least one { id = ...; }."
+    else
+      localAiEndpoints;
+
   # Standard slop-env jail combinator list. Per-OS layers can append
   # additional combinators (e.g. Darwin's host-resolve for /etc/* symlinks)
   # — last-match-wins lets caller-supplied extras narrow defaults.

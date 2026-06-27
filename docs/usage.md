@@ -123,7 +123,7 @@ matrix:
 `nix run …#pi` adds the same three (Pi defaults to the Anthropic
 provider). `nix run …#opencode` adds those three plus `models.dev` (for
 opencode's model catalogue). When a template is built with
-`enableLocalAi = true`, the local launcher talks to ollama on loopback
+`localAi.enable = true`, the local launcher talks to ollama on loopback
 (`127.0.0.1:11434`) and adds **no** outbound allows — it runs fully
 offline.
 
@@ -168,7 +168,7 @@ Both `mkBins` and `mkShell` accept the same arguments. The full list:
 |---|---|---|---|
 | `projectName` | string | `__SLOP_ENV_PROJECT_NAME__` (zero-touch placeholder) | Identifies the per-project state dir (`~/.local/state/<agent>/projects/<projectName>/`). Templates pass an explicit value; apps resolve it at runtime from `basename "$PWD"`. |
 | `agent` | Agent Profile | `profiles.claude` | Which coding agent the Slop Env confines. Pass `slop.profiles.pi` or `slop.profiles.opencode` to select Pi or opencode instead of Claude Code (ADR-0009 / ADR-0010). Each profile carries its own config layout, credential/session locations, provider hosts, and Exchange env-var name. |
-| `enableLocalAi` | bool | `false` | (Pi and opencode profiles) Add a local ollama provider to the Slop Env. No-op for the Claude profile. |
+| `localAi` | attrset | `{}` | (Pi and opencode profiles; no-op for Claude) Local AI over loopback ollama, in NixOS-module shape: `{ enable; settings = { endpoints = [...]; }; }`. **`enable`** (default `false`) is the master switch — when false, `settings` is ignored entirely, so a template can ship example endpoints that stay inert until flipped on. Each `settings.endpoints` entry is `{ name; port; models = [{ id; name?; reasoning? }]; role?; coordinator?; default? }` and emits one `ollama-<name>` provider at the **derived** loopback URL `http://127.0.0.1:<port>/v1` (port-only — never off-loopback, [ADR-0012](adr/0012-port-only-loopback-local-ai.md)). With `enable = true` and an empty `endpoints` list, the legacy single-`localhost:11434` provider is used. Marking one endpoint `coordinator = true` builds a coordinator→workers topology (B2): the coordinator is the launch model and each non-coordinator becomes a worker (opencode `mode = "subagent"`; pi a generated agent def — experimental, [ADR-0013](adr/0013-vendor-pi-subagent-extension.md)). Launch-model precedence: coordinator → a single `default = true` endpoint → anthropic; more than one coordinator or default is an eval error. Empty (the default `{}`) emits no local AI, byte-for-byte. See the recipe below and [ADR-0011](adr/0011-multi-endpoint-local-ai.md). |
 | `agentMdFile` | path | `lib/slop-env/defaults/CLAUDE.md` | Base context file concatenated with all `rulesDir/*.md` into the agent's context file (Claude loads it as `CLAUDE.md`, Pi as `AGENTS.md`; the profile decides). |
 | `rulesDir` | path | `lib/slop-env/defaults/rules` | Directory of `.md` rule files concatenated onto `CLAUDE.md` at jail build time. |
 | `skillsDir` | path or `null` | `null` | Directory of agent skills ([Matt Pocock format](https://github.com/mattpocock/skills/blob/main/README.md)) bind-mounted at `~/.local/state/claude/projects/<projectName>/skills/`. |
@@ -339,3 +339,85 @@ flake, gate the registry on `pkgs.stdenv.isLinux`, since macOS refuses a
 non-empty `accounts`; and note that `accounts` is honoured only by the
 Claude profile — declaring it with the Pi/opencode profiles is currently
 silently ignored ([ADR-0014](adr/0014-per-account-credential-isolation.md)).
+
+### Declare local AI endpoints (multi-provider + coordinator/workers)
+
+(Pi and opencode profiles.) Replace the single hardcoded ollama provider with a
+list of loopback endpoints — one per local model server (e.g. one per GPU). Each
+is **port-only**: the provider URL `http://127.0.0.1:<port>/v1` is derived, so a
+config can never point the agent off-loopback
+([ADR-0012](adr/0012-port-only-loopback-local-ai.md)).
+
+The option follows the NixOS-module idiom — `localAi = { enable; settings; }` —
+so `enable = false` leaves a fully-written example inert (handy in a template):
+
+```nix
+devShells.${system}.default = slop.mkShell {
+  projectName = "my-project";
+  agent = slop.profiles.pi; # or slop.profiles.opencode
+  localAi = {
+    enable = true; # master switch; false ignores settings entirely
+    settings.endpoints = [
+      {
+        name = "big"; # → provider ollama-big
+        port = 11435; # → http://127.0.0.1:11435/v1
+        coordinator = true; # launch model; delegates to the workers below
+        models = [
+          {
+            id = "qwen3-coder:latest";
+            name = "Qwen3 Coder";
+            reasoning = true;
+          }
+        ];
+      }
+      {
+        name = "fast"; # → provider ollama-fast, a worker subagent
+        port = 11434;
+        role = "Quick edits and small refactors"; # the worker's description
+        models = [
+          {
+            id = "qwen3:8b";
+            reasoning = true;
+          }
+        ];
+      }
+    ];
+  };
+};
+```
+
+Forward each remote (or other-host) Ollama to a distinct loopback port with your
+own SSH tunnel before launching — the tunnel is out-of-band, and the agent only
+ever sees `127.0.0.1:<port>`:
+
+```sh
+ssh -N -L 11434:localhost:11434 -L 11435:localhost:11434 gpubox &
+```
+
+On shell entry a warn-only liveness probe reports each endpoint's reachability
+(it never blocks — start the tunnel whenever). Verify a model is actually pulled
+on the server with:
+
+```sh
+curl -s localhost:11435/api/tags | jq '.models[].name'
+```
+
+**Coordinator→workers (B2).** Mark exactly one endpoint `coordinator = true` to
+make it the launch model and turn every other endpoint into a worker the
+coordinator delegates to (opencode uses its native `mode = "subagent"`; pi uses a
+vendored subagent extension — **experimental**,
+[ADR-0013](adr/0013-vendor-pi-subagent-extension.md)). Use `default = true`
+instead of `coordinator` to pick a launch model without generating workers.
+Launch-model precedence is coordinator → default → the built-in anthropic model;
+declaring more than one coordinator or default is an eval error.
+
+**Offline guarantee, precisely.** A local launcher (`pl` / `ocl`) adds no
+Sandbox egress allows and disables the model-fetch. The guarantee is *no
+agent-initiated egress*, not *no data leaves the machine*: if you have tunnelled
+a remote endpoint, prompt data travels that tunnel by your explicit `ssh -L`
+choice ([ADR-0012](adr/0012-port-only-loopback-local-ai.md)).
+
+Setting `localAi.enable = false` (or omitting `localAi`) emits no local AI at
+all — the `settings` are ignored, so example endpoints in a template stay inert.
+With `enable = true` and an empty `settings.endpoints`, the legacy single
+`localhost:11434` provider is used.
