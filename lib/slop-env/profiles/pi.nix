@@ -43,7 +43,7 @@ let
   };
 
   # Local-AI provider, injected to ~/.pi/agent/models.json only when
-  # enableLocalAi is set. Shape matches Pi's ModelsConfigSchema
+  # localAi is enabled. Shape matches Pi's ModelsConfigSchema
   # (model-registry.ts: providers → ProviderConfigSchema).
   piModels = {
     providers = {
@@ -83,6 +83,141 @@ let
     };
   };
 
+  # Loopback base URL derived from a port alone (ADR-0012): a localAi endpoint
+  # is port-only, so the emitted provider can never be pointed off 127.0.0.1.
+  endpointBaseUrl = port: "http://127.0.0.1:${toString port}/v1";
+
+  # One pi provider per endpoint, keyed `ollama-<name>`, in ModelsConfigSchema
+  # shape: api openai-completions, a placeholder apiKey Ollama ignores, and the
+  # local-server compat flags from the single-provider baseline. Each
+  # endpoint's models become pi model entries with zero cost. `builtins.*` (not
+  # lib.*) because the profile's top-level `let` has no `lib` in scope.
+  piProvidersFor =
+    endpoints:
+    builtins.listToAttrs (
+      map (endpoint: {
+        name = "ollama-${endpoint.name}";
+        value = {
+          baseUrl = endpointBaseUrl endpoint.port;
+          api = "openai-completions";
+          apiKey = "ollama";
+          compat = {
+            supportsDeveloperRole = false;
+            supportsReasoningEffort = false;
+          };
+          models = map (model: {
+            id = model.id;
+            name = model.name or model.id;
+            reasoning = model.reasoning or false;
+            cost = {
+              input = 0;
+              output = 0;
+              cacheRead = 0;
+              cacheWrite = 0;
+            };
+          }) endpoint.models;
+        };
+      }) endpoints
+    );
+
+  # models.json content, driven by the `localAi` option. When enabled with a
+  # non-empty endpoints list, emits one provider per endpoint (multi-endpoint
+  # path); otherwise the legacy single localhost provider (piModels). Exposed
+  # for the test vehicle. The write itself stays gated on `localAi.enable` in
+  # mkPiCombinators.
+  modelsFor =
+    {
+      enable ? false,
+      settings ? { },
+    }:
+    let
+      endpoints = if enable then settings.endpoints or [ ] else [ ];
+    in
+    if endpoints != [ ] then
+      { providers = piProvidersFor (shared.assertEndpoints endpoints); }
+    else
+      piModels;
+
+  # First model id of an endpoint, referenced as ollama-<name>/<id> in worker
+  # agent defs (Slice 6).
+  endpointModelRef = endpoint: "ollama-${endpoint.name}/${(builtins.head endpoint.models).id}";
+
+  coordinatorsOf = endpoints: builtins.filter (endpoint: endpoint.coordinator or false) endpoints;
+  defaultsOf = endpoints: builtins.filter (endpoint: endpoint.default or false) endpoints;
+  hasCoordinatorTopology = endpoints: coordinatorsOf endpoints != [ ];
+
+  # settings.json content. With a coordinator/worker topology the marked
+  # coordinator endpoint (else a single default=true endpoint) becomes pi's
+  # launch defaultProvider (ollama-<name>) + defaultModel (its first model id);
+  # otherwise piSettings (anthropic) is unchanged. Precedence coordinator ->
+  # default -> anthropic; more than one coordinator or default is a hard error.
+  # Exposed for the pure-eval test vehicle.
+  settingsFor =
+    {
+      enable ? false,
+      settings ? { },
+    }:
+    let
+      endpoints = if enable then settings.endpoints or [ ] else [ ];
+      coordinators = coordinatorsOf endpoints;
+      defaults = defaultsOf endpoints;
+      launchOf = endpoint: {
+        defaultProvider = "ollama-${endpoint.name}";
+        defaultModel = (builtins.head endpoint.models).id;
+      };
+    in
+    if builtins.length coordinators > 1 then
+      throw "slopEnv (pi): localAi.settings.endpoints declares ${toString (builtins.length coordinators)} coordinators; exactly one is allowed."
+    else if builtins.length defaults > 1 then
+      throw "slopEnv (pi): localAi.settings.endpoints declares ${toString (builtins.length defaults)} default endpoints; at most one is allowed."
+    else if coordinators != [ ] then
+      piSettings // launchOf (builtins.head coordinators)
+    else if defaults != [ ] then
+      piSettings // launchOf (builtins.head defaults)
+    else
+      piSettings;
+
+  # YAML double-quoted scalar escaping for worker .md frontmatter. pi parses
+  # frontmatter with eemeli yaml (UNGUARDED — a malformed scalar crashes agent
+  # discovery), so name/description/model values are emitted as double-quoted
+  # scalars with backslash and double-quote escaped. replaceStrings is a single
+  # left-to-right pass with no re-scan, so escaping `\` and `"` together is safe
+  # (neither is a prefix of the other).
+  yamlQuote = str: "\"" + builtins.replaceStrings [ "\\" "\"" ] [ "\\\\" "\\\"" ] str + "\"";
+
+  # The worker agent .md for one endpoint: frontmatter (name; description = role;
+  # model = ollama-<name>/<id>) plus a body scoping the worker to its role,
+  # fully offline. Matches the recovered fast.md verbatim.
+  workerAgentMd =
+    endpoint:
+    let
+      role = endpoint.role or "Local worker";
+    in
+    ''
+      ---
+      name: ${yamlQuote endpoint.name}
+      description: ${yamlQuote role}
+      model: ${yamlQuote (endpointModelRef endpoint)}
+      ---
+      You are a local worker agent ("${endpoint.name}") running fully offline on the user's machine, backed by a loopback Ollama endpoint — no data leaves the system.
+
+      Your role: ${role}.
+
+      Work autonomously to complete the delegated task, then return a concise result the coordinator can act on.
+    '';
+
+  # One worker .md per NON-coordinator endpoint, keyed by endpoint name (written
+  # to ~/.pi/agent/agents/<name>.md). The coordinator drives pi's launch model
+  # and is excluded from the worker pool. Exposed for the test vehicle.
+  workerAgentDefsFor =
+    endpoints:
+    builtins.listToAttrs (
+      map (endpoint: {
+        name = endpoint.name;
+        value = workerAgentMd endpoint;
+      }) (builtins.filter (endpoint: !(endpoint.coordinator or false)) endpoints)
+    );
+
   contextOf =
     { agentMdFile, rulesDir }:
     shared.mkContextMd {
@@ -107,7 +242,7 @@ let
       skillsDir,
       agentMdFile,
       rulesDir,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -118,6 +253,10 @@ let
       sessionDir = "~/.local/state/pi/projects/${projectName}/sessions";
       scratchDir = "~/.local/state/pi/projects/${projectName}/tmp";
       exchangeDir = "~/.local/state/pi/projects/${projectName}/exchange";
+      # localAi module option, normalized: when disabled, settings (endpoints)
+      # are ignored entirely so the emitted jail is byte-identical.
+      localAiEnabled = localAi.enable or false;
+      localAiEndpoints = if localAiEnabled then localAi.settings.endpoints or [ ] else [ ];
     in
     (with jailC; [
       network
@@ -138,7 +277,9 @@ let
       (try-readwrite (noescape "~/.pi/agent"))
 
       # Nix-injected config, overlaid on top of the writable agent dir.
-      (write-text (noescape "~/.pi/agent/settings.json") (builtins.toJSON piSettings))
+      (write-text (noescape "~/.pi/agent/settings.json") (
+        builtins.toJSON (settingsFor localAi)
+      ))
       (write-text (noescape "~/.pi/agent/AGENTS.md") contextMd)
 
       # Per-project sessions (host-visible, isolated per projectName). The
@@ -178,9 +319,34 @@ let
     ++ lib.optional (skillsDir != null) (
       jailC.ro-bind "${skillsDir}" (jailC.noescape "~/.pi/agent/skills")
     )
-    ++ lib.optional enableLocalAi (
-      jailC.write-text (jailC.noescape "~/.pi/agent/models.json") (builtins.toJSON piModels)
+    ++ lib.optional localAiEnabled (
+      jailC.write-text (jailC.noescape "~/.pi/agent/models.json") (
+        builtins.toJSON (modelsFor localAi)
+      )
     )
+    # B2 coordinator topology: one worker agent def per non-coordinator endpoint
+    # at ~/.pi/agent/agents/<name>.md (Slice 6). Only emitted when a coordinator
+    # is declared, so a plain multi-endpoint config (providers only) and the
+    # default no-endpoints path stay byte-identical.
+    ++ lib.optionals (hasCoordinatorTopology localAiEndpoints) (
+      lib.mapAttrsToList (
+        workerName: mdContent:
+        jailC.write-text (jailC.noescape "~/.pi/agent/agents/${workerName}.md") mdContent
+      ) (workerAgentDefsFor localAiEndpoints)
+    )
+    # B2: ro-bind the vendored pi subagent extension (ADR-0013) so the
+    # coordinator can delegate to local workers. Gated on a coordinator topology
+    # so provider-only and no-endpoint configs stay byte-identical. The bind
+    # source holds exactly index.ts + agents.ts; pi auto-loads user-scope
+    # extensions with no trust gate. See pi-subagent-ext/VENDORED.md.
+    ++ lib.optional (hasCoordinatorTopology localAiEndpoints) (
+      jailC.ro-bind "${./pi-subagent-ext/subagent}" (jailC.noescape "~/.pi/agent/extensions/subagent")
+    )
+    # Slice 5 (ADR-0013): put pi itself on the jail PATH so the subagent
+    # extension can spawn a child `pi --mode json -p --no-session --model
+    # ollama-<name>/<id>` for a worker. Gated on a coordinator topology (the
+    # only case that spawns child pis), so other configs stay byte-identical.
+    ++ lib.optional (hasCoordinatorTopology localAiEndpoints) (jailC.add-pkg-deps [ pi-pkg ])
     ++ lib.mapAttrsToList (key: value: jailC.set-env key value) projectEnv
     ++ extra
     ++ extraCombinators;
@@ -205,6 +371,9 @@ in
   settings = piSettings;
   models = piModels;
 
+  # Pure config generators, exposed for the local-ai-config test vehicle.
+  inherit modelsFor settingsFor workerAgentDefsFor;
+
   # Always-in-context instructions: base AGENTS.md + rules/*, injected at
   # ~/.pi/agent/AGENTS.md where Pi loads it as global context.
   mkContext = contextOf;
@@ -216,7 +385,7 @@ in
       rulesDir,
       skillsDir,
       agentMdFile,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -235,6 +404,8 @@ in
         projectNamePlaceholder
         ;
       usesPlaceholder = projectName == projectNamePlaceholder;
+      localAiEnabled = localAi.enable or false;
+      localAiEndpoints = if localAiEnabled then localAi.settings.endpoints or [ ] else [ ];
 
       piCombinators = mkPiCombinators {
         jailC = jail.combinators;
@@ -245,7 +416,7 @@ in
           skillsDir
           agentMdFile
           rulesDir
-          enableLocalAi
+          localAi
           basePkgs
           projectPkgs
           projectEnv
@@ -326,7 +497,7 @@ in
           ''
       );
 
-      localShellHook = lib.optionalString enableLocalAi ''
+      localShellHook = lib.optionalString localAiEnabled ''
         pi-local() {
           mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
           PI_OFFLINE=1 ${sandboxed}/bin/sandboxed -q \
@@ -356,7 +527,7 @@ in
         fi
         printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${
           lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
-        }
+        }${shared.localLivenessProbe localAiEndpoints}
 
         # Jailed Pi
         pi() {
@@ -395,7 +566,7 @@ in
       rulesDir,
       skillsDir,
       agentMdFile,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -413,6 +584,8 @@ in
         projectNamePlaceholder
         ;
       usesPlaceholder = projectName == projectNamePlaceholder;
+      localAiEnabled = localAi.enable or false;
+      localAiEndpoints = if localAiEnabled then localAi.settings.endpoints or [ ] else [ ];
 
       jailC = jail.combinators;
 
@@ -438,7 +611,7 @@ in
           skillsDir
           agentMdFile
           rulesDir
-          enableLocalAi
+          localAi
           basePkgs
           projectPkgs
           projectEnv
@@ -503,7 +676,7 @@ in
           -e PI_CODING_AGENT_SESSION_DIR -e TMPDIR -e PI_EXCHANGE_DIR -e PI_SKIP_VERSION_CHECK "$@"
       '';
 
-      localShellHook = lib.optionalString enableLocalAi ''
+      localShellHook = lib.optionalString localAiEnabled ''
         pi-local() {
           mkdir -p "$HOME/.pi/agent" "$PI_CODING_AGENT_SESSION_DIR" "$TMPDIR" "$PI_EXCHANGE_DIR"
           PI_OFFLINE=1 ${sandboxedPi}/bin/sandboxed-jailed-pi -q -e PI_OFFLINE "$@"
@@ -527,7 +700,7 @@ in
         fi
         printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$PI_EXCHANGE_DIR"${
           lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
-        }
+        }${shared.localLivenessProbe localAiEndpoints}
       ''
       + localShellHook;
     in

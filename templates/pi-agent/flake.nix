@@ -50,10 +50,43 @@
               rulesDir = ./slop-env/pi-config/rules;
               skillsDir = skills;
 
-              # Flip to true to add a `pi-local` (PI_OFFLINE) launcher and an
-              # ollama provider (models.json) alongside the anthropic `pi`.
-              # Requires a local ollama on http://localhost:11434.
-              enableLocalAi = false;
+              # Local AI over loopback ollama. `enable = false` keeps this inert
+              # (the endpoints below are a ready-to-use example). Flip `enable`
+              # to true, with the SSH tunnels up, to add a `pi-local`
+              # (PI_OFFLINE) launcher, one ollama-<name> provider per endpoint in
+              # models.json, and — because `big` is the coordinator — a
+              # coordinator->workers topology (generated worker agent defs + the
+              # vendored subagent extension). Endpoints are port-only: the
+              # loopback URL http://127.0.0.1:<port>/v1 is derived. See
+              # docs/usage.md and ADRs 0011/0012/0013.
+              localAi = {
+                enable = false;
+                settings.endpoints = [
+                  {
+                    name = "big"; # → provider ollama-big (127.0.0.1:11435/v1)
+                    port = 11435;
+                    coordinator = true; # launch model; delegates to the workers
+                    models = [
+                      {
+                        id = "qwen3-coder:latest";
+                        name = "Qwen3 Coder";
+                        reasoning = true;
+                      }
+                    ];
+                  }
+                  {
+                    name = "fast"; # → provider ollama-fast, a worker subagent
+                    port = 11434;
+                    role = "Quick edits and small refactors";
+                    models = [
+                      {
+                        id = "qwen3:8b";
+                        reasoning = true;
+                      }
+                    ];
+                  }
+                ];
+              };
 
               # hunk in projectPkgs reaches BOTH the jail (so the agent can
               # drive a review with `hunk session …`) and this dev shell (so

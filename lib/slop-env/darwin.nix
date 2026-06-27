@@ -27,7 +27,10 @@ let
       rulesDir ? ./defaults/rules,
       skillsDir ? null,
       agentMdFile ? ./defaults/CLAUDE.md,
-      enableLocalAi ? false,
+      # Local AI module option ({ enable; settings = { endpoints }; }), forwarded
+      # to the pi/opencode profile builders. Default {} (disabled) emits no local
+      # AI, byte-identical to today. No-op for the Claude profile.
+      localAi ? { },
       basePkgs ? shared.defaultBasePkgs,
       projectPkgs ? [ ],
       projectEnv ? { },
@@ -56,7 +59,7 @@ let
           rulesDir
           skillsDir
           agentMdFile
-          enableLocalAi
+          localAi
           basePkgs
           projectPkgs
           projectEnv

@@ -156,9 +156,9 @@ Every template's `flake.nix` already wires `hunk` and `worktrunk` (the `wt`
 worktree-workflow CLI) into `projectPkgs` and merges hunk's `hunk-review`
 skill into `skillsDir`, so a freshly-initialised template ships with diff
 review and worktree management on both the dev shell and the jailed agent.
-The `agent` and `enableLocalAi` arguments (selecting a non-Claude Agent
-Profile and a local ollama provider) are covered in
-[docs/usage.md](docs/usage.md).
+The `agent` and `localAi` arguments (selecting a non-Claude Agent Profile and
+local ollama provider(s) — including a multi-endpoint coordinator→workers
+topology over loopback) are covered in [docs/usage.md](docs/usage.md).
 
 In the example above, `nix develop` enters the shell; the `shellHook` runs 
 prereq checks and puts `claude` / `jail-shell` on PATH wired to the project's
@@ -193,13 +193,15 @@ Available templates:
   plugin-dev tooling, and headless test plumbing.
 - `pi-agent` — Slop Env preconfigured for Pi
   ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
-  Claude Code, with an `enableLocalAi` toggle for a local ollama provider.
-  Same Sandbox / Jail guarantees; see [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
+  Claude Code, with a `localAi` option for local ollama provider(s) and
+  coordinator→workers orchestration. Same Sandbox / Jail guarantees; see
+  [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
   for the Agent Profile abstraction behind it.
 - `opencode` — Slop Env preconfigured for opencode
   ([sst/opencode](https://github.com/sst/opencode)) instead of Claude Code,
-  with an `enableLocalAi` toggle for a local ollama provider. Same Sandbox /
-  Jail guarantees; see [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)
+  with a `localAi` option for local ollama provider(s) and coordinator→workers
+  orchestration. Same Sandbox / Jail guarantees; see
+  [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)
   for the zero-touch divergence behind it.
 
 Customisation recipes for combinators, project packages, and env-var
