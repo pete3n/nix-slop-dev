@@ -88,3 +88,30 @@ own private temp lives in the agent's mount namespace and is unreachable
 from the host. Surfaced to the agent as `$TMPDIR` across every Agent Profile.
 _Avoid_: tmp (unqualified), Exchange (deliberate and persistent — different
 intent)
+
+**Local AI Endpoint**:
+A single loopback model server — an Ollama instance — that the Pi or opencode
+Agent Profile is pointed at, declared port-only: a Slop Env supplies
+`{ name; port; models; … }` and the profile derives the provider URL
+`http://127.0.0.1:<port>/v1` itself. There is no `host`/`baseUrl` field, so an
+endpoint can never resolve off the loopback interface, and each endpoint becomes
+exactly one provider keyed `ollama-<name>`. A remote model server is reached only
+through the user's own out-of-band SSH tunnel to a local port — the tunnel lives
+outside the Jail, and the agent only ever sees `127.0.0.1:<port>`. The Claude
+Agent Profile has none; endpoints are declared under the master-switched
+`localAi = { enable; settings.endpoints = [ … ]; }` option.
+_Avoid_: baseUrl/host (the URL is derived from `port`, never supplied); provider
+(an endpoint produces one `ollama-<name>` provider, but is declared by port)
+
+**Coordinator→workers (B2)**:
+The fully-local orchestration topology — codenamed B2 — in which one Local AI
+Endpoint marked `coordinator = true` becomes the launch model and delegates
+scoped subtasks to the remaining endpoints, each of which becomes one worker; the
+coordinator is itself excluded from the worker pool. opencode reaches this
+natively (a `mode = "subagent"` agent per worker); Pi reaches it through a
+vendored subagent extension and is therefore experimental. Launch-model
+precedence is the coordinator, then a single `default = true` endpoint, then the
+built-in anthropic model; declaring more than one coordinator or default is an
+eval error.
+_Avoid_: orchestrator/lead/manager (the role is the coordinator); subagent (the
+opencode/Pi mechanism that implements a worker, not the domain term)

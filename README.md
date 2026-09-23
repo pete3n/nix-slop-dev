@@ -156,8 +156,9 @@ Every template's `flake.nix` already wires `hunk` and `worktrunk` (the `wt`
 worktree-workflow CLI) into `projectPkgs` and merges hunk's `hunk-review`
 skill into `skillsDir`, so a freshly-initialised template ships with diff
 review and worktree management on both the dev shell and the jailed agent.
-The `agent` and `enableLocalAi` arguments (selecting a non-Claude Agent
-Profile and a local ollama provider) are covered in
+The `agent` and `localAi` arguments (selecting a non-Claude Agent Profile and
+local ollama provider(s) — including a multi-endpoint coordinator→workers
+topology over loopback) are covered under [Local AI](#local-ai) and in
 [docs/usage.md](docs/usage.md).
 
 In the example above, `nix develop` enters the shell; the `shellHook` runs 
@@ -193,13 +194,15 @@ Available templates:
   plugin-dev tooling, and headless test plumbing.
 - `pi-agent` — Slop Env preconfigured for Pi
   ([earendil-works/pi](https://github.com/earendil-works/pi)) instead of
-  Claude Code, with an `enableLocalAi` toggle for a local ollama provider.
-  Same Sandbox / Jail guarantees; see [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
+  Claude Code, with a `localAi` option for local ollama provider(s) and
+  coordinator→workers orchestration. Same Sandbox / Jail guarantees; see
+  [ADR-0009](docs/adr/0009-agent-profile-generalization.md)
   for the Agent Profile abstraction behind it.
 - `opencode` — Slop Env preconfigured for opencode
   ([sst/opencode](https://github.com/sst/opencode)) instead of Claude Code,
-  with an `enableLocalAi` toggle for a local ollama provider. Same Sandbox /
-  Jail guarantees; see [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)
+  with a `localAi` option for local ollama provider(s) and coordinator→workers
+  orchestration. Same Sandbox / Jail guarantees; see
+  [ADR-0010](docs/adr/0010-opencode-zero-touch-without-placeholder.md)
   for the zero-touch divergence behind it.
 
 Customisation recipes for combinators, project packages, and env-var
@@ -302,6 +305,53 @@ A human walkthrough that doubles as the feature's acceptance test. Most scenario
 3. **Fail-closed on a typo.** `NIX_SLOP_DEV_ACCOUNT=typo claude` refuses with the `is not declared in this Slop Env … Refusing to launch.` error, non-zero, before the Jail starts. (Pinned by [tests/account-launcher.nix](tests/account-launcher.nix).)
 4. **Backward compatibility.** Remove `accounts`/`defaultAccount` (or leave them at their defaults) and `claude` runs exactly as before, against `~/.local/state/claude/shared/.credentials.json` — byte-for-byte unchanged. (Pinned by the byte-equality baseline [tests/template-claude-code-drv.nix](tests/template-claude-code-drv.nix) against `tests/template-claude-code-drv.expected`.)
 5. **macOS.** On a Darwin system, declaring a non-empty `accounts` fails evaluation with the `slopEnv (darwin): … not implemented on macOS …` message — Linux-only this pass.
+
+### Local AI
+
+Point the **Pi** or **opencode** Agent Profile at one or more local model servers instead of a cloud provider. Each is a **Local AI Endpoint** — a loopback Ollama server declared **port-only**: the Slop Env derives the provider URL `http://127.0.0.1:<port>/v1` itself (one `ollama-<name>` provider per endpoint), so a config can never aim the agent off the loopback interface ([ADR-0012](docs/adr/0012-port-only-loopback-local-ai.md)). The Claude Agent Profile takes no local-AI path. This section is a summary; the full recipe and complete option reference live in [docs/usage.md](docs/usage.md), and the design rationale in [ADR-0011](docs/adr/0011-multi-endpoint-local-ai.md).
+
+The option follows the NixOS-module idiom — `localAi = { enable; settings; }` — so `enable = false` (or omitting `localAi`) leaves a fully-written example inert and emits no local AI byte-for-byte. Each `settings.endpoints` entry becomes one provider:
+
+```nix
+devShells.${system}.default = slop.mkShell {
+  projectName = "my-project";
+  agent = slop.profiles.pi; # or slop.profiles.opencode
+
+  localAi = {
+    enable = true; # master switch; enable = false keeps settings inert
+    settings.endpoints = [
+      {
+        name = "big"; # → provider ollama-big
+        port = 11435; # → derived http://127.0.0.1:11435/v1
+        coordinator = true; # launch model; delegates to the workers below
+        models = [ { id = "qwen3-coder:latest"; reasoning = true; } ];
+      }
+      {
+        name = "fast"; # → provider ollama-fast, a worker subagent
+        port = 11434;
+        role = "Quick edits and small refactors"; # the worker's description
+        models = [ { id = "qwen3:8b"; reasoning = true; } ];
+      }
+    ];
+  };
+};
+```
+
+**The SSH tunnel is yours to set up.** Forward each remote (or other-host) Ollama to a distinct loopback port *before* launching — the tunnel is out-of-band, so the agent only ever sees `127.0.0.1:<port>`. A warn-only liveness probe on shell entry reports each endpoint's reachability without ever blocking, so you can start the tunnel whenever:
+
+```sh
+ssh -N -L 11434:localhost:11434 -L 11435:localhost:11434 gpubox &
+```
+
+Confirm a model is actually pulled on the server with:
+
+```sh
+curl -s localhost:11435/api/tags | jq '.models[].name'
+```
+
+**Offline guarantee, precisely.** Launch with the local launcher (`pl` → `pi-local`, `ocl` → `opencode-local`): it adds **no Sandbox egress** allows and disables the model-fetch. The guarantee is *no agent-initiated egress* — **not** *no data leaves the machine*. Loopback is intentionally not network-confined by the Sandbox, so if you have tunnelled a *remote* endpoint, prompt data travels that tunnel by your explicit `ssh -L` choice ([ADR-0012](docs/adr/0012-port-only-loopback-local-ai.md)).
+
+**Coordinator→workers (B2).** Mark exactly one endpoint `coordinator = true` to make it the launch model and turn every other endpoint into a worker it delegates scoped subtasks to. opencode's path is **stable** (native `mode = "subagent"`); pi's is **experimental** — a vendored subagent extension ([ADR-0013](docs/adr/0013-vendor-pi-subagent-extension.md)). Use `default = true` instead of `coordinator` to pick a launch model without generating any workers. Launch-model precedence is **coordinator → a single `default = true` endpoint → the built-in anthropic model**; declaring more than one coordinator or default is an eval error.
 
 ## How it works
 ### Concepts

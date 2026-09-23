@@ -13,7 +13,7 @@
 #
 # Public API (stable contract):
 #   slop.mkShell { projectName, agent?, rulesDir, skillsDir, agentMdFile,
-#                  enableLocalAi?, basePkgs?, projectPkgs?, projectEnv?,
+#                  localAi?, basePkgs?, projectPkgs?, projectEnv?,
 #                  extraCombinators?, accounts?, defaultAccount? }
 #     → pkgs.mkShell ...
 #   slop.mkBins  { same args }

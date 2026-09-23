@@ -44,7 +44,7 @@ let
   };
 
   # Local-AI provider + sub-agent, merged into opencode.json only when
-  # enableLocalAi is set. The npm package (@ai-sdk/openai-compatible) is bundled
+  # localAi is enabled. The npm package (@ai-sdk/openai-compatible) is bundled
   # in the opencode binary, so no registry fetch is needed; the loopback
   # baseURL is not network-confined by the Sandbox, so the local launcher runs
   # genuinely offline (OPENCODE_DISABLE_MODELS_FETCH=1, no --allow hosts).
@@ -79,17 +79,124 @@ let
     };
   };
 
+  # Loopback base URL derived from a port alone (ADR-0012): a localAi endpoint
+  # is port-only, so the emitted provider can never be pointed off 127.0.0.1.
+  endpointBaseUrl = port: "http://127.0.0.1:${toString port}/v1";
+
+  # One opencode provider per endpoint, keyed `ollama-<name>`, exposing that
+  # endpoint's models. Mirrors opencodeLocalProvider's shape (the bundled
+  # @ai-sdk/openai-compatible npm package + a placeholder apiKey Ollama
+  # ignores) but with the per-endpoint loopback baseURL. `builtins.listToAttrs`
+  # (not lib.*) because the profile's top-level `let` has no `lib` in scope.
+  opencodeProvidersFor =
+    endpoints:
+    builtins.listToAttrs (
+      map (endpoint: {
+        name = "ollama-${endpoint.name}";
+        value = {
+          npm = "@ai-sdk/openai-compatible";
+          name = "Ollama (${endpoint.name})";
+          options = {
+            baseURL = endpointBaseUrl endpoint.port;
+            apiKey = "ollama";
+          };
+          models = builtins.listToAttrs (
+            map (model: {
+              name = model.id;
+              value = {
+                name = model.name or model.id;
+              };
+            }) endpoint.models
+          );
+        };
+      }) endpoints
+    );
+
+  # First model id of an endpoint. The launch model and each worker's model are
+  # referenced as `ollama-<name>/<first model id>` (provider key + model id).
+  endpointModelRef = endpoint: "ollama-${endpoint.name}/${(builtins.head endpoint.models).id}";
+
+  coordinatorsOf = endpoints: builtins.filter (endpoint: endpoint.coordinator or false) endpoints;
+  defaultsOf = endpoints: builtins.filter (endpoint: endpoint.default or false) endpoints;
+
+  # Worker agent system prompt: a local, offline worker scoped to its declared
+  # role. Shares its shape with the pi worker .md body (Slice 6).
+  workerPrompt = endpoint: ''
+    You are a local worker agent ("${endpoint.name}") running fully offline on the user's machine, backed by a loopback Ollama endpoint — no data leaves the system.
+
+    Your role: ${endpoint.role or "a local worker"}.
+
+    Work autonomously to complete the delegated task, then return a concise result the coordinator can act on.
+  '';
+
+  # Coordinator/worker (B2) launch model + subagents for a multi-endpoint
+  # config. Precedence (recovered): a single `coordinator` endpoint is the
+  # launch model AND is excluded from the worker pool (so no loopback port hosts
+  # both coordinator and a worker — avoids OLLAMA_MAX_LOADED_MODELS=1 eviction);
+  # else a single `default = true` endpoint is the launch model with NO workers;
+  # else the built-in anthropic model is kept. More than one coordinator, or
+  # more than one default, is ambiguous and is a hard error.
+  opencodeCoordinatorSettings =
+    endpoints:
+    let
+      coordinators = coordinatorsOf endpoints;
+      defaults = defaultsOf endpoints;
+      workerEndpoints = builtins.filter (endpoint: !(endpoint.coordinator or false)) endpoints;
+      workerAgents = builtins.listToAttrs (
+        map (endpoint: {
+          name = endpoint.name;
+          value = {
+            model = endpointModelRef endpoint;
+            mode = "subagent";
+            description = endpoint.role or "Local worker";
+            prompt = workerPrompt endpoint;
+          };
+        }) workerEndpoints
+      );
+    in
+    if builtins.length coordinators > 1 then
+      throw "slopEnv (opencode): localAi.settings.endpoints declares ${toString (builtins.length coordinators)} coordinators; exactly one is allowed."
+    else if builtins.length defaults > 1 then
+      throw "slopEnv (opencode): localAi.settings.endpoints declares ${toString (builtins.length defaults)} default endpoints; at most one is allowed."
+    else if coordinators != [ ] then
+      {
+        model = endpointModelRef (builtins.head coordinators);
+        agent = workerAgents;
+      }
+    else if defaults != [ ] then
+      { model = endpointModelRef (builtins.head defaults); }
+    else
+      { };
+
+  # opencode.json local-AI settings, driven by the `localAi` module option
+  # ({ enable; settings = { endpoints }; }). `enable` is the master switch: when
+  # false, `settings` is ignored entirely and no provider is emitted (so a
+  # template can ship example endpoints that stay inert). When enabled, a
+  # non-empty `endpoints` list emits one provider per endpoint plus the
+  # coordinator/worker launch model + agents; an empty list falls back to the
+  # legacy single-localhost provider + agent. Exposed for the test vehicle.
   settingsFor =
-    enableLocalAi:
+    {
+      enable ? false,
+      settings ? { },
+    }:
+    let
+      endpoints = settings.endpoints or [ ];
+    in
     opencodeSettings
     // (
-      if enableLocalAi then
+      if !enable then
+        { }
+      else if endpoints != [ ] then
+        let
+          validated = shared.assertEndpoints endpoints;
+        in
+        { provider = opencodeProvidersFor validated; } // opencodeCoordinatorSettings validated
+      else
         {
           provider = opencodeLocalProvider;
           agent = opencodeLocalAgent;
         }
-      else
-        { }
     );
 
   contextOf =
@@ -119,7 +226,7 @@ let
       skillsDir,
       agentMdFile,
       rulesDir,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -168,7 +275,7 @@ let
       # opencode reads those, never writes them.
       cfgDirInit
       (write-text (noescape "~/.config/opencode/opencode.json") (
-        builtins.toJSON (settingsFor enableLocalAi)
+        builtins.toJSON (settingsFor localAi)
       ))
       (write-text (noescape "~/.config/opencode/AGENTS.md") contextMd)
 
@@ -224,6 +331,9 @@ in
   package = opencode-pkg;
   settings = opencodeSettings;
 
+  # Pure opencode.json generator, exposed for the local-ai-config test vehicle.
+  inherit settingsFor;
+
   # Always-in-context instructions: base AGENTS.md + rules/*, injected at
   # ~/.config/opencode/AGENTS.md where opencode loads it as ambient context.
   mkContext = contextOf;
@@ -235,7 +345,7 @@ in
       rulesDir,
       skillsDir,
       agentMdFile,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -254,6 +364,8 @@ in
         projectNamePlaceholder
         ;
       usesPlaceholder = projectName == projectNamePlaceholder;
+      localAiEnabled = localAi.enable or false;
+      localAiEndpoints = localAi.settings.endpoints or [ ];
 
       ocCombinators = mkOpencodeCombinators {
         jailC = jail.combinators;
@@ -263,7 +375,7 @@ in
           skillsDir
           agentMdFile
           rulesDir
-          enableLocalAi
+          localAi
           basePkgs
           projectPkgs
           projectEnv
@@ -317,7 +429,7 @@ in
 
       # Local (offline) launcher: loopback isn't network-confined, so no --allow
       # hosts; OPENCODE_DISABLE_MODELS_FETCH=1 keeps it from touching models.dev.
-      localShellHook = lib.optionalString enableLocalAi ''
+      localShellHook = lib.optionalString localAiEnabled ''
         opencode-local() {
           ${preamble}
           OPENCODE_DISABLE_MODELS_FETCH=1 ${sandboxed}/bin/sandboxed -q \
@@ -347,7 +459,7 @@ in
         fi
         printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${
           lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
-        }
+        }${shared.localLivenessProbe (lib.optionals localAiEnabled localAiEndpoints)}
 
         # Jailed opencode
         opencode() {
@@ -387,7 +499,7 @@ in
       rulesDir,
       skillsDir,
       agentMdFile,
-      enableLocalAi,
+      localAi ? { },
       basePkgs,
       projectPkgs,
       projectEnv,
@@ -405,6 +517,8 @@ in
         projectNamePlaceholder
         ;
       usesPlaceholder = projectName == projectNamePlaceholder;
+      localAiEnabled = localAi.enable or false;
+      localAiEndpoints = localAi.settings.endpoints or [ ];
 
       jailC = jail.combinators;
 
@@ -425,7 +539,7 @@ in
           skillsDir
           agentMdFile
           rulesDir
-          enableLocalAi
+          localAi
           basePkgs
           projectPkgs
           projectEnv
@@ -486,7 +600,7 @@ in
           -e TMPDIR -e OPENCODE_EXCHANGE_DIR "$@"
       '';
 
-      localShellHook = lib.optionalString enableLocalAi ''
+      localShellHook = lib.optionalString localAiEnabled ''
         opencode-local() {
           ${preamble}
           OPENCODE_DISABLE_MODELS_FETCH=1 ${sandboxedOpencode}/bin/sandboxed-jailed-opencode -q \
@@ -511,7 +625,7 @@ in
         fi
         printf '\033[1;36mℹ\033[0m Exchange files with the agent via \033[1m%s\033[0m\n' "$OPENCODE_EXCHANGE_DIR"${
           lib.optionalString (extraShellHook != "") "\n${extraShellHook}"
-        }
+        }${shared.localLivenessProbe (lib.optionals localAiEnabled localAiEndpoints)}
       ''
       + localShellHook;
     in
