@@ -145,7 +145,6 @@
 
             slop-env-darwin = import ./tests/slop-env-darwin.nix {
               inherit pkgs self;
-              inherit (pkgs) lib;
             };
 
             apps-darwin-jail-has-placeholder =

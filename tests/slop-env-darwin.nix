@@ -17,7 +17,6 @@
 # placeholder-mode bash dance.
 {
   pkgs,
-  lib,
   self,
 }:
 let

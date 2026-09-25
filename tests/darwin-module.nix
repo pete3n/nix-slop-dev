@@ -51,20 +51,20 @@ let
       environment.systemPackages = lib.mkOption {
         type = lib.types.listOf lib.types.package;
         default = [ ];
+      };
 
-        security = {
-          sudo.extraRules = lib.mkOption {
-            type = lib.types.listOf lib.types.attrs;
-            default = [ ];
-          };
-          audit.enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
-          auditd.enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
+      security = {
+        sudo.extraRules = lib.mkOption {
+          type = lib.types.listOf lib.types.attrs;
+          default = [ ];
+        };
+        audit.enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+        };
+        auditd.enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
         };
       };
     };

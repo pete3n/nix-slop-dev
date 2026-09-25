@@ -24,8 +24,8 @@ with lib;
   # The below arguments can typically be left as their defaults
   # Additional lua packages (not plugins), e.g. from luarocks.org.
   # e.g. p: [p.jsregexp]
-  extraLuaPackages ? p: [ ],
-  extraPython3Packages ? p: [ ], # Additional python 3 packages
+  extraLuaPackages ? _: [ ],
+  extraPython3Packages ? _: [ ], # Additional python 3 packages
   withPython3 ? true, # Build Neovim with Python 3 support?
   withRuby ? false, # Build Neovim with Ruby support?
   withNodeJs ? false, # Build Neovim with NodeJS support?
@@ -80,7 +80,7 @@ let
       inherit src;
       name = "nvim-rtp-src";
       filter =
-        path: tyoe:
+        path: _type:
         let
           srcPrefix = toString src + "/";
           relPath = lib.removePrefix srcPrefix (toString path);
@@ -206,7 +206,15 @@ let
       + extraMakeWrapperLuaCArgs
       + " "
       + extraMakeWrapperLuaArgs;
-    inherit wrapRc;
+    # Pass these through, or wrapNeovimUnstable silently uses its own
+    # defaults (Ruby on, no vi/vim aliases) and the options above do nothing.
+    inherit
+      wrapRc
+      withRuby
+      withNodeJs
+      viAlias
+      vimAlias
+      ;
   };
 
   isCustomAppName = appName != null && appName != "nvim";
