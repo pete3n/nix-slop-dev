@@ -128,6 +128,13 @@ let
           # forwarded by the shared combinator list (shared.nix) on both
           # platforms — `env -i` drops them, and the launchers below export
           # both pointing into the persistent cfgDir.
+          #
+          # Claude Code ignores TMPDIR on macOS and puts its temp dir in
+          # /tmp, which the jail denies. CLAUDE_CODE_TMPDIR is the only
+          # override it honours there, so the launchers set it to TMPDIR and
+          # we forward it through `env -i` here. macOS-only: Linux claude
+          # still follows TMPDIR.
+          (try-fwd-env "CLAUDE_CODE_TMPDIR")
 
           # claude-code (Bun) spawns /usr/bin/security to read OAuth
           # credentials from the macOS keychain (and to store new ones
@@ -234,6 +241,8 @@ let
           # the deliberate user<->agent handoff channel (see CONTEXT.md);
           # sandbox-exec passes the exported env through, so no -e is needed.
           export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+          # Claude Code ignores TMPDIR on macOS; see darwinJailExtras.
+          export CLAUDE_CODE_TMPDIR="$TMPDIR"
           export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
           mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
@@ -253,6 +262,8 @@ let
           # the deliberate user<->agent handoff channel (see CONTEXT.md);
           # sandbox-exec passes the exported env through, so no -e is needed.
           export TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+          # Claude Code ignores TMPDIR on macOS; see darwinJailExtras.
+          export CLAUDE_CODE_TMPDIR="$TMPDIR"
           export CLAUDE_EXCHANGE_DIR="$CLAUDE_CONFIG_DIR/exchange"
           mkdir -p "$CLAUDE_CONFIG_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
