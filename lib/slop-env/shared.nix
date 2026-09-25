@@ -5,7 +5,7 @@
 # the jail combinator list and the dev shell.
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 in
 {
   # Default base package set. Every Slop Env ships at least these so the

@@ -21,7 +21,7 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = flake.packages.${pkgs.stdenv.hostPlatform.system}.sandboxed.override {
-        stateDir = cfg.stateDir;
+        inherit (cfg) stateDir;
       };
       defaultText = lib.literalExpression "sandboxed built with configured stateDir";
       description = "The sandboxed-darwin package to install.";

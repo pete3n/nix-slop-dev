@@ -61,18 +61,16 @@ in
 pkgs.testers.runNixOSTest {
   name = "slop-sandbox-wl-live-update";
 
-  nodes.server =
-    { ... }:
-    {
-      services.nginx = {
-        enable = true;
-        virtualHosts."stub" = {
-          default = true;
-          locations."/".return = "200 ${stubToken}";
-        };
+  nodes.server = _: {
+    services.nginx = {
+      enable = true;
+      virtualHosts."stub" = {
+        default = true;
+        locations."/".return = "200 ${stubToken}";
       };
-      networking.firewall.allowedTCPPorts = [ 80 ];
     };
+    networking.firewall.allowedTCPPorts = [ 80 ];
+  };
 
   nodes.agent =
     { ... }:

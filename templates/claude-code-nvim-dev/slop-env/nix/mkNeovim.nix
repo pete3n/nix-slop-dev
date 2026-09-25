@@ -206,7 +206,7 @@ let
       + extraMakeWrapperLuaCArgs
       + " "
       + extraMakeWrapperLuaArgs;
-    wrapRc = wrapRc;
+    inherit wrapRc;
   };
 
   isCustomAppName = appName != null && appName != "nvim";

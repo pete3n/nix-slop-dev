@@ -15,7 +15,7 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = flake.packages.${pkgs.stdenv.hostPlatform.system}.sandboxed.override {
-        stateDir = cfg.stateDir;
+        inherit (cfg) stateDir;
       };
       defaultText = lib.literalExpression "sandboxed built with configured stateDir";
       description = "The sandboxed package to install.";
@@ -42,36 +42,38 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    security.audit.enable = true;
-    security.auditd.enable = true;
+    security = {
+      audit.enable = true;
+      auditd.enable = true;
+      sudo.extraRules = map (user: {
+        users = [ user ];
+        commands = [
+          {
+            command = "${pkgs.systemd}/bin/systemd-run";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.systemd}/bin/systemctl";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.coreutils}/bin/tail";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.audit}/bin/auditctl";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.audit}/bin/ausearch";
+            options = [ "NOPASSWD" ];
+          }
+        ];
+      }) cfg.users;
+    };
 
     # Install sandboxed system-wide
     environment.systemPackages = [ cfg.package ];
 
-    security.sudo.extraRules = map (user: {
-      users = [ user ];
-      commands = [
-        {
-          command = "${pkgs.systemd}/bin/systemd-run";
-          options = [ "NOPASSWD" ];
-        }
-        {
-          command = "${pkgs.systemd}/bin/systemctl";
-          options = [ "NOPASSWD" ];
-        }
-        {
-          command = "${pkgs.coreutils}/bin/tail";
-          options = [ "NOPASSWD" ];
-        }
-        {
-          command = "${pkgs.audit}/bin/auditctl";
-          options = [ "NOPASSWD" ];
-        }
-        {
-          command = "${pkgs.audit}/bin/ausearch";
-          options = [ "NOPASSWD" ];
-        }
-      ];
-    }) cfg.users;
   };
 }

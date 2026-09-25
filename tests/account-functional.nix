@@ -38,19 +38,17 @@ in
 pkgs.testers.runNixOSTest {
   name = "slop-account-functional";
 
-  nodes.agent =
-    { ... }:
-    {
-      users.users.agent = {
-        isNormalUser = true;
-      };
-      # Only the raw account-enabled jail launcher is realised; jailedClaude
-      # (which pulls the agent package) is evaluated but never referenced.
-      environment.systemPackages = [
-        bins.jailedShell
-        pkgs.gnused
-      ];
+  nodes.agent = _: {
+    users.users.agent = {
+      isNormalUser = true;
     };
+    # Only the raw account-enabled jail launcher is realised; jailedClaude
+    # (which pulls the agent package) is evaluated but never referenced.
+    environment.systemPackages = [
+      bins.jailedShell
+      pkgs.gnused
+    ];
+  };
 
   testScript = ''
     agent.wait_for_unit("multi-user.target")

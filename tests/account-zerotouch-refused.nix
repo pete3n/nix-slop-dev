@@ -19,19 +19,19 @@ let
     };
   };
 
-  zerotouch = builtins.tryEval (
-    (slop.mkBins {
-      accounts = accts;
-      defaultAccount = "acme";
-    }).shellHook
-  );
-  concrete = builtins.tryEval (
-    (slop.mkBins {
-      projectName = "acct-zt";
-      accounts = accts;
-      defaultAccount = "acme";
-    }).shellHook
-  );
+  zerotouch =
+    builtins.tryEval
+      (slop.mkBins {
+        accounts = accts;
+        defaultAccount = "acme";
+      }).shellHook;
+  concrete =
+    builtins.tryEval
+      (slop.mkBins {
+        projectName = "acct-zt";
+        accounts = accts;
+        defaultAccount = "acme";
+      }).shellHook;
 in
 if zerotouch.success then
   throw "zero-touch+Accounts not refused: mkBins with `accounts` and no projectName must fail at eval"

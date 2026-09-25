@@ -26,7 +26,7 @@
 }:
 let
   slop-oracle = pkgs.writeShellScriptBin "slop-oracle" (builtins.readFile ./oracle/slop-oracle.sh);
-  mkBins = (self.lib.slopEnv pkgs).mkBins;
+  inherit ((self.lib.slopEnv pkgs)) mkBins;
 
   # claude-code template: exact config args from templates/claude-code/flake.nix
   # (projectPkgs is empty there, so the jail is unmodified — the oracle rides in
@@ -90,13 +90,11 @@ in
 pkgs.testers.runNixOSTest {
   name = "slop-template-functional";
 
-  nodes.agent =
-    { ... }:
-    {
-      users.users.agent = {
-        isNormalUser = true;
-      };
+  nodes.agent = _: {
+    users.users.agent = {
+      isNormalUser = true;
     };
+  };
 
   testScript = ''
     agent.wait_for_unit("multi-user.target")

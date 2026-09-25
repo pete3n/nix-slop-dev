@@ -106,7 +106,7 @@ let
             supportsReasoningEffort = false;
           };
           models = map (model: {
-            id = model.id;
+            inherit (model) id;
             name = model.name or model.id;
             reasoning = model.reasoning or false;
             cost = {
@@ -213,7 +213,7 @@ let
     endpoints:
     builtins.listToAttrs (
       map (endpoint: {
-        name = endpoint.name;
+        inherit (endpoint) name;
         value = workerAgentMd endpoint;
       }) (builtins.filter (endpoint: !(endpoint.coordinator or false)) endpoints)
     );
@@ -277,9 +277,7 @@ let
       (try-readwrite (noescape "~/.pi/agent"))
 
       # Nix-injected config, overlaid on top of the writable agent dir.
-      (write-text (noescape "~/.pi/agent/settings.json") (
-        builtins.toJSON (settingsFor localAi)
-      ))
+      (write-text (noescape "~/.pi/agent/settings.json") (builtins.toJSON (settingsFor localAi)))
       (write-text (noescape "~/.pi/agent/AGENTS.md") contextMd)
 
       # Per-project sessions (host-visible, isolated per projectName). The
@@ -320,9 +318,7 @@ let
       jailC.ro-bind "${skillsDir}" (jailC.noescape "~/.pi/agent/skills")
     )
     ++ lib.optional localAiEnabled (
-      jailC.write-text (jailC.noescape "~/.pi/agent/models.json") (
-        builtins.toJSON (modelsFor localAi)
-      )
+      jailC.write-text (jailC.noescape "~/.pi/agent/models.json") (builtins.toJSON (modelsFor localAi))
     )
     # B2 coordinator topology: one worker agent def per non-coordinator endpoint
     # at ~/.pi/agent/agents/<name>.md (Slice 6). Only emitted when a coordinator

@@ -144,7 +144,7 @@ let
       workerEndpoints = builtins.filter (endpoint: !(endpoint.coordinator or false)) endpoints;
       workerAgents = builtins.listToAttrs (
         map (endpoint: {
-          name = endpoint.name;
+          inherit (endpoint) name;
           value = {
             model = endpointModelRef endpoint;
             mode = "subagent";
@@ -274,9 +274,7 @@ let
       # store-injected opencode.json + AGENTS.md are layered read-only on top;
       # opencode reads those, never writes them.
       cfgDirInit
-      (write-text (noescape "~/.config/opencode/opencode.json") (
-        builtins.toJSON (settingsFor localAi)
-      ))
+      (write-text (noescape "~/.config/opencode/opencode.json") (builtins.toJSON (settingsFor localAi)))
       (write-text (noescape "~/.config/opencode/AGENTS.md") contextMd)
 
       # Optional API-key auth; auth.json (`opencode auth login`) takes priority

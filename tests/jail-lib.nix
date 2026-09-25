@@ -1154,8 +1154,8 @@ let
           slice = host-resolve "/etc/bashrc";
         in
         {
-          sbpl = slice.sbpl;
-          hostResolve = slice.hostResolve;
+          inherit (slice) sbpl;
+          inherit (slice) hostResolve;
         };
       expected = {
         sbpl = ''

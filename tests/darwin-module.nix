@@ -47,21 +47,26 @@ let
   # silently re-introduced Linux-only machinery — a non-default
   # assignment from our module would flow through here.
   stubSchema = { lib, ... }: {
-    options.environment.systemPackages = lib.mkOption {
-      type = lib.types.listOf lib.types.package;
-      default = [ ];
-    };
-    options.security.sudo.extraRules = lib.mkOption {
-      type = lib.types.listOf lib.types.attrs;
-      default = [ ];
-    };
-    options.security.audit.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
-    options.security.auditd.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
+    options = {
+      environment.systemPackages = lib.mkOption {
+        type = lib.types.listOf lib.types.package;
+        default = [ ];
+
+        security = {
+          sudo.extraRules = lib.mkOption {
+            type = lib.types.listOf lib.types.attrs;
+            default = [ ];
+          };
+          audit.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+          };
+          auditd.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+          };
+        };
+      };
     };
   };
 
@@ -74,7 +79,7 @@ let
       modules = [
         (importModule flake)
         stubSchema
-        ({ ... }: {
+        (_: {
           _module.args.pkgs = pkgs;
         })
         { security.sandboxed = cfg; }

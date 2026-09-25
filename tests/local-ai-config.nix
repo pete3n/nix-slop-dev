@@ -16,7 +16,7 @@
 #  or: nix eval --raw '.#checks.x86_64-linux.local-ai-config.drvPath'  (eval-only)
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   shared = import ../lib/slop-env/shared.nix { inherit pkgs; };
 
@@ -276,105 +276,95 @@ let
   # Hardening: malformed endpoint lists must fail with a clear error, not a
   # silent provider collision or a cryptic builtins.head failure. tryEval forces
   # .providers so the validating throw inside the generator is exercised.
-  dupNameEval = builtins.tryEval (pi.modelsFor (enabledWith [
-    {
-      name = "dup";
-      port = 11434;
-      models = [ { id = "a"; } ];
-    }
-    {
-      name = "dup";
-      port = 11435;
-      models = [ { id = "b"; } ];
-    }
-  ])).providers;
-  emptyModelsEval = builtins.tryEval (pi.modelsFor (enabledWith [
-    {
-      name = "x";
-      port = 11434;
-      models = [ ];
-    }
-  ])).providers;
+  dupNameEval =
+    builtins.tryEval
+      (pi.modelsFor (enabledWith [
+        {
+          name = "dup";
+          port = 11434;
+          models = [ { id = "a"; } ];
+        }
+        {
+          name = "dup";
+          port = 11435;
+          models = [ { id = "b"; } ];
+        }
+      ])).providers;
+  emptyModelsEval =
+    builtins.tryEval
+      (pi.modelsFor (enabledWith [
+        {
+          name = "x";
+          port = 11434;
+          models = [ ];
+        }
+      ])).providers;
 
   behaviours = [
     (expectEq "opencode: single endpoint derives loopback baseURL for ollama-<name>"
       "http://127.0.0.1:11434/v1"
       ocSingle.provider."ollama-solo".options.baseURL
     )
-    (expectEq "opencode: one provider per endpoint, keyed ollama-<name>"
-      [ "ollama-big" "ollama-fast" ]
-      (builtins.attrNames ocMulti.provider)
-    )
-    (expectEq "opencode: each endpoint's baseURL derives from its own port"
-      "http://127.0.0.1:11435/v1"
+    (expectEq "opencode: one provider per endpoint, keyed ollama-<name>" [
+      "ollama-big"
+      "ollama-fast"
+    ] (builtins.attrNames ocMulti.provider))
+    (expectEq "opencode: each endpoint's baseURL derives from its own port" "http://127.0.0.1:11435/v1"
       ocMulti.provider."ollama-big".options.baseURL
     )
-    (expectEq "opencode: declared model name flows into the provider's models"
-      "Qwen3 Coder"
+    (expectEq "opencode: declared model name flows into the provider's models" "Qwen3 Coder"
       ocMulti.provider."ollama-big".models."qwen3-coder:latest".name
     )
-    (expectEq "opencode: a model without a name defaults its display name to its id"
-      "qwen3:8b"
+    (expectEq "opencode: a model without a name defaults its display name to its id" "qwen3:8b"
       ocMulti.provider."ollama-fast".models."qwen3:8b".name
     )
     (expectEq "opencode: enabled with no endpoints keeps the legacy localhost provider"
       "http://localhost:11434/v1"
       ocEnabledNoEndpoints.provider.ollama.options.baseURL
     )
-    (expectEq "opencode: enabled with no endpoints keeps the legacy local subagent"
-      "subagent"
+    (expectEq "opencode: enabled with no endpoints keeps the legacy local subagent" "subagent"
       ocEnabledNoEndpoints.agent.local.mode
     )
-    (expectEq "opencode: disabled (no config) emits no provider"
-      false
-      (builtins.hasAttr "provider" ocDisabled)
-    )
+    (expectEq "opencode: disabled (no config) emits no provider" false (
+      builtins.hasAttr "provider" ocDisabled
+    ))
 
     # --- localAi.enable master switch: disabled ignores configured endpoints ---
-    (expectEq "opencode: disabled ignores configured endpoints (no provider)"
-      false
-      (builtins.hasAttr "provider" ocDisabledWithEndpoints)
-    )
+    (expectEq "opencode: disabled ignores configured endpoints (no provider)" false (
+      builtins.hasAttr "provider" ocDisabledWithEndpoints
+    ))
     (expectEq "opencode: disabled ignores configured endpoints (launch model stays anthropic)"
       "anthropic/claude-sonnet-4-6"
       ocDisabledWithEndpoints.model
     )
-    (expectEq "pi: disabled ignores configured endpoints (no ollama-<name> provider)"
-      false
-      (builtins.hasAttr "ollama-big" piDisabledWithEndpoints.providers)
-    )
+    (expectEq "pi: disabled ignores configured endpoints (no ollama-<name> provider)" false (
+      builtins.hasAttr "ollama-big" piDisabledWithEndpoints.providers
+    ))
 
     # --- Slice 2: pi emits one ollama-<name> provider per endpoint in models.json ---
     (expectEq "pi: single endpoint derives loopback baseUrl for ollama-<name>"
       "http://127.0.0.1:11434/v1"
       piSingle.providers."ollama-solo".baseUrl
     )
-    (expectEq "pi: one provider per endpoint, keyed ollama-<name>"
-      [ "ollama-big" "ollama-fast" ]
-      (builtins.attrNames piMulti.providers)
-    )
-    (expectEq "pi: each endpoint's baseUrl derives from its own port"
-      "http://127.0.0.1:11435/v1"
+    (expectEq "pi: one provider per endpoint, keyed ollama-<name>" [ "ollama-big" "ollama-fast" ] (
+      builtins.attrNames piMulti.providers
+    ))
+    (expectEq "pi: each endpoint's baseUrl derives from its own port" "http://127.0.0.1:11435/v1"
       piMulti.providers."ollama-big".baseUrl
     )
-    (expectEq "pi: providers use the openai-completions API"
-      "openai-completions"
+    (expectEq "pi: providers use the openai-completions API" "openai-completions"
       piMulti.providers."ollama-big".api
     )
-    (expectEq "pi: local-server compat flags are set per provider"
-      false
+    (expectEq "pi: local-server compat flags are set per provider" false
       piMulti.providers."ollama-big".compat.supportsDeveloperRole
     )
-    (expectEq "pi: declared model reasoning flag flows into the model entry"
-      true
+    (expectEq "pi: declared model reasoning flag flows into the model entry" true
       (builtins.head piMulti.providers."ollama-big".models).reasoning
     )
-    (expectEq "pi: a model without a name defaults its display name to its id"
-      "qwen3:8b"
+    (expectEq "pi: a model without a name defaults its display name to its id" "qwen3:8b"
       (builtins.head piMulti.providers."ollama-fast".models).name
     )
-    (expectEq "pi: a model without a reasoning flag defaults to false"
-      false
+    (expectEq "pi: a model without a reasoning flag defaults to false" false
       (builtins.head piMulti.providers."ollama-fast".models).reasoning
     )
     (expectEq "pi: enabled with no endpoints keeps the legacy localhost provider"
@@ -383,30 +373,24 @@ let
     )
 
     # --- Slice 3: loopback liveness probe ---
-    (expectEq "probe: TCP-connects each endpoint's port via /dev/tcp on loopback"
-      true
-      (lib.hasInfix "/dev/tcp/127.0.0.1/11435" probeMulti)
-    )
-    (expectEq "probe: probes every declared endpoint"
-      true
-      (lib.hasInfix "/dev/tcp/127.0.0.1/11434" probeMulti)
-    )
-    (expectEq "probe: empty endpoint list yields no probe (byte-identical default)"
-      ""
-      (shared.localLivenessProbe [ ])
-    )
-    (expectEq "probe: prints a summary hint when nothing is reachable"
-      true
-      (lib.hasInfix "no local AI endpoints reachable" probeMulti)
-    )
-    (expectEq "probe: reaches the opencode shellHook when localAi is enabled"
-      true
-      (lib.hasInfix "/dev/tcp/127.0.0.1/11434" ocHookEnabled)
-    )
-    (expectEq "probe: reaches the pi shellHook when localAi is enabled"
-      true
-      (lib.hasInfix "/dev/tcp/127.0.0.1/11434" piHookEnabled)
-    )
+    (expectEq "probe: TCP-connects each endpoint's port via /dev/tcp on loopback" true (
+      lib.hasInfix "/dev/tcp/127.0.0.1/11435" probeMulti
+    ))
+    (expectEq "probe: probes every declared endpoint" true (
+      lib.hasInfix "/dev/tcp/127.0.0.1/11434" probeMulti
+    ))
+    (expectEq "probe: empty endpoint list yields no probe (byte-identical default)" "" (
+      shared.localLivenessProbe [ ]
+    ))
+    (expectEq "probe: prints a summary hint when nothing is reachable" true (
+      lib.hasInfix "no local AI endpoints reachable" probeMulti
+    ))
+    (expectEq "probe: reaches the opencode shellHook when localAi is enabled" true (
+      lib.hasInfix "/dev/tcp/127.0.0.1/11434" ocHookEnabled
+    ))
+    (expectEq "probe: reaches the pi shellHook when localAi is enabled" true (
+      lib.hasInfix "/dev/tcp/127.0.0.1/11434" piHookEnabled
+    ))
     (expectEq "probe: absent from the opencode shellHook when localAi is disabled (even with endpoints)"
       false
       (lib.hasInfix "/dev/tcp" ocHookDisabledWithEndpoints)
@@ -417,94 +401,67 @@ let
       "ollama-big/qwen3-coder:latest"
       ocCoord.model
     )
-    (expectEq "opencode: one subagent worker per non-coordinator endpoint"
-      [ "fast" ]
-      (builtins.attrNames ocCoord.agent)
-    )
-    (expectEq "opencode: a worker is a subagent"
-      "subagent"
-      ocCoord.agent.fast.mode
-    )
-    (expectEq "opencode: a worker's model is its endpoint's ollama-<name>/<id>"
-      "ollama-fast/qwen3:8b"
+    (expectEq "opencode: one subagent worker per non-coordinator endpoint" [ "fast" ] (
+      builtins.attrNames ocCoord.agent
+    ))
+    (expectEq "opencode: a worker is a subagent" "subagent" ocCoord.agent.fast.mode)
+    (expectEq "opencode: a worker's model is its endpoint's ollama-<name>/<id>" "ollama-fast/qwen3:8b"
       ocCoord.agent.fast.model
     )
     (expectEq "opencode: a worker's description is its endpoint's role"
       "Quick edits and small refactors"
       ocCoord.agent.fast.description
     )
-    (expectEq "opencode: a default endpoint sets the launch model"
-      "ollama-primary/qwen3:8b"
+    (expectEq "opencode: a default endpoint sets the launch model" "ollama-primary/qwen3:8b"
       ocDefault.model
     )
-    (expectEq "opencode: a default endpoint generates no workers"
-      false
-      (builtins.hasAttr "agent" ocDefault)
-    )
+    (expectEq "opencode: a default endpoint generates no workers" false (
+      builtins.hasAttr "agent" ocDefault
+    ))
     (expectEq "opencode: no coordinator/default keeps the anthropic launch model"
       "anthropic/claude-sonnet-4-6"
       ocPlain.model
     )
-    (expectEq "opencode: no coordinator/default still emits providers"
-      true
-      (builtins.hasAttr "provider" ocPlain)
-    )
-    (expectEq "opencode: more than one coordinator is a hard error"
-      false
-      ocTwoCoord.success
-    )
-    (expectEq "opencode: more than one default endpoint is a hard error"
-      false
-      ocTwoDefault.success
-    )
+    (expectEq "opencode: no coordinator/default still emits providers" true (
+      builtins.hasAttr "provider" ocPlain
+    ))
+    (expectEq "opencode: more than one coordinator is a hard error" false ocTwoCoord.success)
+    (expectEq "opencode: more than one default endpoint is a hard error" false ocTwoDefault.success)
 
     # --- Slice 6: pi coordinator (settings.json) ---
-    (expectEq "pi: the coordinator endpoint becomes the default provider"
-      "ollama-big"
+    (expectEq "pi: the coordinator endpoint becomes the default provider" "ollama-big"
       piCoord.defaultProvider
     )
-    (expectEq "pi: the coordinator's first model becomes the default model"
-      "qwen3-coder:latest"
+    (expectEq "pi: the coordinator's first model becomes the default model" "qwen3-coder:latest"
       piCoord.defaultModel
     )
 
     # --- Slice 6: pi worker .md generation ---
-    (expectEq "pi: one worker .md per non-coordinator endpoint (coordinator excluded)"
-      [ "fast" ]
-      (builtins.attrNames piWorkerDefs)
-    )
-    (expectEq "pi worker .md: opens with a YAML frontmatter fence at byte 0"
-      true
-      (lib.hasPrefix "---\nname:" piWorkerDefs.fast)
-    )
-    (expectEq "pi worker .md: name is the endpoint name (double-quoted)"
-      true
-      (lib.hasInfix ''name: "fast"'' piWorkerDefs.fast)
-    )
-    (expectEq "pi worker .md: description is the role (double-quoted)"
-      true
-      (lib.hasInfix ''description: "Quick edits and small refactors"'' piWorkerDefs.fast)
-    )
-    (expectEq "pi worker .md: model is ollama-<name>/<id> (double-quoted)"
-      true
-      (lib.hasInfix ''model: "ollama-fast/qwen3:8b"'' piWorkerDefs.fast)
-    )
-    (expectEq "pi worker .md: body scopes the worker to its role"
-      true
-      (lib.hasInfix "Your role: Quick edits and small refactors." piWorkerDefs.fast)
-    )
-    (expectEq "pi worker .md: a hostile role round-trips as an escaped double-quoted scalar"
-      true
-      (lib.hasInfix ''description: "Reason: \"deep\" \\ dives #1"'' piHostileDefs.tricky)
-    )
+    (expectEq "pi: one worker .md per non-coordinator endpoint (coordinator excluded)" [ "fast" ] (
+      builtins.attrNames piWorkerDefs
+    ))
+    (expectEq "pi worker .md: opens with a YAML frontmatter fence at byte 0" true (
+      lib.hasPrefix "---\nname:" piWorkerDefs.fast
+    ))
+    (expectEq "pi worker .md: name is the endpoint name (double-quoted)" true (
+      lib.hasInfix ''name: "fast"'' piWorkerDefs.fast
+    ))
+    (expectEq "pi worker .md: description is the role (double-quoted)" true (
+      lib.hasInfix ''description: "Quick edits and small refactors"'' piWorkerDefs.fast
+    ))
+    (expectEq "pi worker .md: model is ollama-<name>/<id> (double-quoted)" true (
+      lib.hasInfix ''model: "ollama-fast/qwen3:8b"'' piWorkerDefs.fast
+    ))
+    (expectEq "pi worker .md: body scopes the worker to its role" true (
+      lib.hasInfix "Your role: Quick edits and small refactors." piWorkerDefs.fast
+    ))
+    (expectEq "pi worker .md: a hostile role round-trips as an escaped double-quoted scalar" true (
+      lib.hasInfix ''description: "Reason: \"deep\" \\ dives #1"'' piHostileDefs.tricky
+    ))
 
     # --- Hardening: malformed endpoint lists fail clearly ---
-    (expectEq "validation: duplicate endpoint names are a hard error"
-      false
-      dupNameEval.success
-    )
-    (expectEq "validation: an endpoint declaring no models is a hard error"
-      false
+    (expectEq "validation: duplicate endpoint names are a hard error" false dupNameEval.success)
+    (expectEq "validation: an endpoint declaring no models is a hard error" false
       emptyModelsEval.success
     )
   ];

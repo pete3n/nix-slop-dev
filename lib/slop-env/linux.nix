@@ -13,7 +13,7 @@
 # Produces { mkShell; mkBins; } consumed by lib/slop-env/default.nix.
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   # Sentinel projectName for the zero-touch apps path. When mkBins is
   # called with no projectName (the default), the jail's cfgDir paths
@@ -214,6 +214,8 @@ let
           mkdir -p "$CLAUDE_CONFIG_DIR" "$_slop_cred_dir" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           touch "$_slop_cred_dir/.credentials.json"
           [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+          mkdir -p "$CLAUDE_CONFIG_DIR/projects" "$CLAUDE_CONFIG_DIR/sessions"
+          touch "$CLAUDE_CONFIG_DIR/history.jsonl"
           SLOP_LAUNCH_DIR=$(${pkgs.coreutils}/bin/mktemp -d -t slop-env.XXXXXX)
           trap '${pkgs.coreutils}/bin/rm -rf "$SLOP_LAUNCH_DIR"' EXIT
           SLOP_LAUNCHER="$SLOP_LAUNCH_DIR/${jailedName}"
@@ -238,6 +240,12 @@ let
           mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
           touch "$CLAUDE_SHARED_DIR/.credentials.json"
           [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+          # cfgDir is a tmpfs inside the jail, and try-readwrite only binds a
+          # path back to disk if it already exists on the host. Without these,
+          # session transcripts (/resume), memory, and history are wiped on
+          # exit.
+          mkdir -p "$CLAUDE_CONFIG_DIR/projects" "$CLAUDE_CONFIG_DIR/sessions"
+          touch "$CLAUDE_CONFIG_DIR/history.jsonl"
         '';
 
         # Per-invocation projectName resolution + sed-substitution of the
@@ -353,6 +361,8 @@ let
             mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
             touch "$CLAUDE_SHARED_DIR/.credentials.json"
             [ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+            mkdir -p "$CLAUDE_CONFIG_DIR/projects" "$CLAUDE_CONFIG_DIR/sessions"
+            touch "$CLAUDE_CONFIG_DIR/history.jsonl"
 
             # Setup checks
             _setup_ok=1
@@ -382,6 +392,8 @@ let
             	mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_SHARED_DIR" "$TMPDIR" "$CLAUDE_EXCHANGE_DIR"
             	touch "$CLAUDE_SHARED_DIR/.credentials.json"
             	[ -s "$CLAUDE_CONFIG_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+            	mkdir -p "$CLAUDE_CONFIG_DIR/projects" "$CLAUDE_CONFIG_DIR/sessions"
+            	touch "$CLAUDE_CONFIG_DIR/history.jsonl"
             	sandboxed -q --allow api.anthropic.com --allow platform.claude.com --allow 2607:6bc0::/32 \
             		-e CLAUDE_CONFIG_DIR -e TMPDIR -e CLAUDE_EXCHANGE_DIR \
             		${

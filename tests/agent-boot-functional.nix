@@ -64,24 +64,22 @@ in
 pkgs.testers.runNixOSTest {
   name = "slop-agent-boot-functional";
 
-  nodes.agent =
-    { ... }:
-    {
-      users.users.agent = {
-        isNormalUser = true;
-      };
-
-      # Booting opencode realises its full closure (the bun runtime), so the
-      # guest needs more headroom than the bash-only jail test.
-      virtualisation = {
-        memorySize = 4096;
-        diskSize = 8192;
-      };
-
-      # The boot script pulls jailed-opencode into the closure; install it so
-      # the derivation is realised in the guest.
-      environment.systemPackages = [ opencodeBins.jailedAgent ];
+  nodes.agent = _: {
+    users.users.agent = {
+      isNormalUser = true;
     };
+
+    # Booting opencode realises its full closure (the bun runtime), so the
+    # guest needs more headroom than the bash-only jail test.
+    virtualisation = {
+      memorySize = 4096;
+      diskSize = 8192;
+    };
+
+    # The boot script pulls jailed-opencode into the closure; install it so
+    # the derivation is realised in the guest.
+    environment.systemPackages = [ opencodeBins.jailedAgent ];
+  };
 
   testScript = ''
     agent.wait_for_unit("multi-user.target")

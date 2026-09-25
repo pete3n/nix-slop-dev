@@ -16,7 +16,7 @@
 # Produces { mkShell; mkBins; } consumed by lib/slop-env/default.nix.
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   projectNamePlaceholder = "__SLOP_ENV_PROJECT_NAME__";
 
@@ -43,7 +43,6 @@ let
       # evaluates here, but a non-empty `accounts` is refused below rather than
       # silently giving macOS broken isolation.
       accounts ? { },
-      defaultAccount ? null,
     }:
     # Deny-by-default: refuse Accounts on Darwin this pass instead of ignoring
     # them. Empty `accounts` is the no-Account path and stays byte-identical.

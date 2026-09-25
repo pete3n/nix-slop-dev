@@ -44,5 +44,5 @@
   # hooks when they gain Account support (their auth files differ); the
   # launcher-level keyFile/ANTHROPIC_API_KEY plumbing in linux.nix is Claude-
   # first this pass and generalises to a profile hook as a follow-up.
-  mkJailCombinators = shared.mkJailCombinators;
+  inherit (shared) mkJailCombinators;
 }
